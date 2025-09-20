@@ -66,7 +66,7 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
                 val maxPromptTokens = (contextSize * (1.0 - CONTEXT_RESERVATION_PERCENT)).toInt()
 
                 if (contextSize > 0 && singleMessageTokens.size >= maxPromptTokens) {
-                    conversation = conversation.dropLast(1) + "Error: Your message is too long to process. Please shorten it."
+                    uiMessages = uiMessages.dropLast(1) + "Error: Your message is too long to process. Please shorten it."
                     Log.e(tag, "Single message is too long. Tokens: ${singleMessageTokens.size}, Max: $maxPromptTokens")
                     return@launch
                 }

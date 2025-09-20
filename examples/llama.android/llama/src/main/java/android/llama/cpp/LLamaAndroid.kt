@@ -127,7 +127,9 @@ class LLamaAndroid {
                     val context = new_context(model)
                     if (context == 0L) throw IllegalStateException("new_context() failed")
 
-                    val batch = new_batch(512, 0, 1)
+                    // **THE FIX:** Change 512 to a larger value, like the context size.
+                    // Using 2048 is a safe bet since that's your n_ctx.
+                    val batch = new_batch(2048, 0, 1) // <-- MODIFIED LINE
                     if (batch == 0L) throw IllegalStateException("new_batch() failed")
 
                     val sampler = new_sampler()

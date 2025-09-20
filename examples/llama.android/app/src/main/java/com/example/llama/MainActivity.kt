@@ -32,6 +32,10 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.getSystemService
 import com.example.llama.ui.theme.LlamaAndroidTheme
 import java.io.File
+// Add these imports to the top of the file
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 
 class MainActivity(
     activityManager: ActivityManager? = null,
@@ -129,11 +133,18 @@ fun MainCompose(
                 }
             }
         }
+
+        // MODIFY THIS COMPONENT
         OutlinedTextField(
             value = viewModel.message,
             onValueChange = { viewModel.updateMessage(it) },
             label = { Text("Message") },
+            // ADD THIS: Changes the keyboard's return key to a "Send" action
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            // ADD THIS: Executes the code when the "Send" action is pressed
+            keyboardActions = KeyboardActions(onSend = { viewModel.send() })
         )
+
         Row {
             Button({ viewModel.send() }) { Text("Send") }
             Button({ viewModel.bench(8, 4, 1) }) { Text("Bench") }
