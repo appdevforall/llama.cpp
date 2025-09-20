@@ -120,7 +120,7 @@ fun MainCompose(
 
         Box(modifier = Modifier.weight(1f)) {
             LazyColumn(state = scrollState) {
-                items(viewModel.messages) {
+                items(viewModel.uiMessages) {
                     Text(
                         it,
                         style = MaterialTheme.typography.bodyLarge.copy(color = LocalContentColor.current),
@@ -139,7 +139,7 @@ fun MainCompose(
             Button({ viewModel.bench(8, 4, 1) }) { Text("Bench") }
             Button({ viewModel.clear() }) { Text("Clear") }
             Button({
-                viewModel.messages.joinToString("\n").let {
+                viewModel.uiMessages.joinToString("\n").let {
                     clipboard.setPrimaryClip(ClipData.newPlainText("", it))
                 }
             }) { Text("Copy") }

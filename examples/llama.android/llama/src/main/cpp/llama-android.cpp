@@ -316,6 +316,29 @@ Java_android_llama_cpp_LLamaAndroid_new_1sampler(JNIEnv *, jobject) {
     auto sparams = llama_sampler_chain_default_params();
     sparams.no_perf = true;
     llama_sampler * smpl = llama_sampler_chain_init(sparams);
+
+    // The last n tokens to consider for the repetition penalty.
+    // -1 means use the entire context size. 64 is a common default.
+    int32_t penalty_last_n = 64;
+
+    // The penalty value. 1.0 means no penalty. 1.1 is a good start.
+    float penalty_repeat = 1.1f;
+
+    // The following two penalties are disabled (set to 0.0) but are required
+    // by the function signature.
+    float penalty_freq = 0.0f;
+    float penalty_present = 0.0f;
+
+    // **THE FIX:** Add the penalties sampler to the chain.
+    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(
+            penalty_last_n,
+            penalty_repeat,
+            penalty_freq,
+            penalty_present
+    ));
+
+    // The chain must end with a sampler that actually selects a token.
+    // Greedy is the simplest (always picks the most likely token).
     llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
 
     return reinterpret_cast<jlong>(smpl);

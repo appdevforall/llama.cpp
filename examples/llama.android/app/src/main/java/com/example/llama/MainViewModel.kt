@@ -42,7 +42,7 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
             try {
                 llamaAndroid.unload()
             } catch (exc: IllegalStateException) {
-                messages += exc.message!!
+                uiMessages += exc.message!!
             }
         }
     }
@@ -50,12 +50,14 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
     fun send() {
         val text = message
         if (text.isBlank()) return
-
         message = ""
 
-        // Add user message to the UI immediately
-        messages += text
-        messages += "" // Placeholder for the bot's reply
+        // Add to the clean conversation history
+        conversation += text
+
+        // Also add to the UI for the user to see
+        uiMessages += text
+        uiMessages += "" // Placeholder for the bot's reply
 
         viewModelScope.launch {
             try {
@@ -64,7 +66,7 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
                 val maxPromptTokens = (contextSize * (1.0 - CONTEXT_RESERVATION_PERCENT)).toInt()
 
                 if (contextSize > 0 && singleMessageTokens.size >= maxPromptTokens) {
-                    messages = messages.dropLast(1) + "Error: Your message is too long to process. Please shorten it."
+                    conversation = conversation.dropLast(1) + "Error: Your message is too long to process. Please shorten it."
                     Log.e(tag, "Single message is too long. Tokens: ${singleMessageTokens.size}, Max: $maxPromptTokens")
                     return@launch
                 }
@@ -72,16 +74,27 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
                 // Build the final prompt with history
                 val finalPrompt = buildPromptWithHistory(text)
 
-                // Send the truncated, context-aware prompt to the model
                 llamaAndroid.send(finalPrompt)
                     .catch {
                         Log.e(tag, "send() failed", it)
-                        messages = messages.dropLast(1) + (it.message ?: "An unknown error occurred.")
+                        val errorMsg = it.message ?: "An unknown error occurred."
+                        uiMessages = uiMessages.dropLast(1) + errorMsg
                     }
-                    .collect { messages = messages.dropLast(1) + (messages.last() + it) }
+                    .collect { newTextChunk ->
+                        // Add new text to the clean conversation history
+                        if (conversation.lastOrNull()?.endsWith(uiMessages.last()) == false) {
+                            // This is the first chunk, append it
+                            conversation = conversation.dropLast(1) + (conversation.last() + newTextChunk)
+                        } else {
+                            // Subsequent chunks, append to the last message
+                            conversation = conversation.dropLast(1) + (conversation.last() + newTextChunk)
+                        }
 
+                        // Also update the UI list
+                        uiMessages = uiMessages.dropLast(1) + (uiMessages.last() + newTextChunk)
+                    }
             } catch (e: IllegalStateException) {
-                messages = messages.dropLast(1) + "Error: Model not loaded. Cannot send message."
+                uiMessages = uiMessages.dropLast(1) + "Error: Model not loaded."
             }
         }
     }
