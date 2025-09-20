@@ -1,6 +1,10 @@
 package com.example.llama
 
+import android.content.Context
+import android.database.Cursor
+import android.net.Uri
 import android.llama.cpp.LLamaAndroid
+import android.provider.OpenableColumns
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -10,6 +14,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
+import java.io.File
+import java.io.FileOutputStream
 
 class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instance()): ViewModel() {
 
@@ -43,6 +49,56 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
                 llamaAndroid.unload()
             } catch (exc: IllegalStateException) {
                 uiMessages += exc.message!!
+            }
+        }
+    }
+
+    // ADD THIS HELPER FUNCTION
+    private fun getFileName(context: Context, uri: Uri): String {
+        var result: String? = null
+        if (uri.scheme == "content") {
+            val cursor: Cursor? = context.contentResolver.query(uri, null, null, null, null)
+            try {
+                if (cursor != null && cursor.moveToFirst()) {
+                    val colIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (colIndex >= 0) {
+                        result = cursor.getString(colIndex)
+                    }
+                }
+            } finally {
+                cursor?.close()
+            }
+        }
+        if (result == null) {
+            result = uri.path
+            val cut = result?.lastIndexOf('/')
+            if (cut != null && cut != -1) {
+                result = result?.substring(cut + 1)
+            }
+        }
+        return result?.ifBlank { "temp_model.gguf" } ?: "temp_model.gguf"
+    }
+
+    // ADD THIS NEW FUNCTION
+    fun loadModelFromUri(uri: Uri, context: Context) {
+        viewModelScope.launch {
+            try {
+                val fileName = getFileName(context, uri)
+                log("Preparing to copy '$fileName' from storage...")
+                val destinationFile = File(context.cacheDir, fileName)
+
+                context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                    FileOutputStream(destinationFile).use { outputStream ->
+                        inputStream.copyTo(outputStream)
+                    }
+                }
+
+                log("Model copied to cache. Loading...")
+                load(destinationFile.path)
+
+            } catch (e: Exception) {
+                Log.e(tag, "Failed to load model from URI", e)
+                log("Error loading model from file: ${e.message}")
             }
         }
     }

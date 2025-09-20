@@ -4,6 +4,8 @@ import android.app.ActivityManager
 import android.app.DownloadManager
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.StrictMode
@@ -11,6 +13,8 @@ import android.os.StrictMode.VmPolicy
 import android.text.format.Formatter
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +32,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.core.content.getSystemService
 import com.example.llama.ui.theme.LlamaAndroidTheme
@@ -35,7 +40,9 @@ import java.io.File
 // Add these imports to the top of the file
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.input.ImeAction
+
+// ADD THIS CONSTANT
+private const val SAVED_MODEL_URI_KEY = "saved_model_uri"
 
 class MainActivity(
     activityManager: ActivityManager? = null,
@@ -49,6 +56,8 @@ class MainActivity(
     private val clipboardManager by lazy { clipboardManager ?: getSystemService<ClipboardManager>()!! }
 
     private val viewModel: MainViewModel by viewModels()
+    // ADD THIS LAUNCHER
+    private lateinit var filePickerLauncher: ActivityResultLauncher<Array<String>>
 
     // Get a MemoryInfo object for the device's current memory status.
     private fun availableMemory(): ActivityManager.MemoryInfo {
@@ -59,6 +68,24 @@ class MainActivity(
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // ADD THIS INITIALIZATION
+        val prefs = getPreferences(Context.MODE_PRIVATE)
+        filePickerLauncher = registerForActivityResult(
+            ActivityResultContracts.OpenDocument()
+        ) { uri ->
+            if (uri != null) {
+                // Persist permission to access the file across reboots
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+                // Save the URI to SharedPreferences
+                prefs.edit().putString(SAVED_MODEL_URI_KEY, uri.toString()).apply()
+                viewModel.loadModelFromUri(uri, this@MainActivity)
+            }
+        }
+
 
         StrictMode.setVmPolicy(
             VmPolicy.Builder(StrictMode.getVmPolicy())
@@ -99,11 +126,35 @@ class MainActivity(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
+                    // MODIFY THIS CALL
                     MainCompose(
                         viewModel,
                         clipboardManager,
                         downloadManager,
                         models,
+                        onLoadFromFileClicked = {
+                            // Launch the file picker
+                            filePickerLauncher.launch(arrayOf("*/*"))
+                        },
+                        onLoadFromSavedClicked = {
+                            val savedUriString = prefs.getString(SAVED_MODEL_URI_KEY, null)
+                            if (savedUriString != null) {
+                                val uri = Uri.parse(savedUriString)
+                                // Check if permission is still valid
+                                val hasPermission = contentResolver.persistedUriPermissions.any {
+                                    it.uri == uri && it.isReadPermission
+                                }
+                                if (hasPermission) {
+                                    viewModel.loadModelFromUri(uri, this)
+                                } else {
+                                    viewModel.log("Permission for saved model lost. Please select it again.")
+                                    // Remove the invalid URI from prefs
+                                    prefs.edit().remove(SAVED_MODEL_URI_KEY).apply()
+                                }
+                            } else {
+                                viewModel.log("No saved model found. Use 'Load from file' first.")
+                            }
+                        }
                     )
                 }
 
@@ -113,11 +164,14 @@ class MainActivity(
 }
 
 @Composable
+// MODIFY THIS FUNCTION SIGNATURE
 fun MainCompose(
     viewModel: MainViewModel,
     clipboard: ClipboardManager,
     dm: DownloadManager,
-    models: List<Downloadable>
+    models: List<Downloadable>,
+    onLoadFromFileClicked: () -> Unit,
+    onLoadFromSavedClicked: () -> Unit
 ) {
     Column {
         val scrollState = rememberLazyListState()
@@ -134,14 +188,11 @@ fun MainCompose(
             }
         }
 
-        // MODIFY THIS COMPONENT
         OutlinedTextField(
             value = viewModel.message,
             onValueChange = { viewModel.updateMessage(it) },
             label = { Text("Message") },
-            // ADD THIS: Changes the keyboard's return key to a "Send" action
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            // ADD THIS: Executes the code when the "Send" action is pressed
             keyboardActions = KeyboardActions(onSend = { viewModel.send() })
         )
 
@@ -156,9 +207,17 @@ fun MainCompose(
             }) { Text("Copy") }
         }
 
+        // MODIFY THIS COMPONENT
         Column {
             for (model in models) {
                 Downloadable.Button(viewModel, dm, model)
+            }
+            // ADD THESE BUTTONS
+            Button(onClick = onLoadFromFileClicked) {
+                Text("Load from file")
+            }
+            Button(onClick = onLoadFromSavedClicked) {
+                Text("Load from saved")
             }
         }
     }
