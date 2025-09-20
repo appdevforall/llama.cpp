@@ -450,3 +450,54 @@ JNIEXPORT void JNICALL
 Java_android_llama_cpp_LLamaAndroid_kv_1cache_1clear(JNIEnv *, jobject, jlong context) {
     llama_memory_clear(llama_get_memory(reinterpret_cast<llama_context *>(context)), true);
 }
+
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_android_llama_cpp_LLamaAndroid_model_1n_1ctx(
+        JNIEnv *env,
+        jobject /* this */,
+        jlong context_ptr) {
+    auto *context = reinterpret_cast<llama_context *>(context_ptr);
+    if (!context) {
+        return 0;
+    }
+    return llama_n_ctx(context);
+}
+// In your llama-android.cpp file...
+
+// Replace the ENTIRE existing tokenize function with this one
+extern "C" JNIEXPORT jintArray JNICALL
+Java_android_llama_cpp_LLamaAndroid_tokenize(
+        JNIEnv *env,
+        jobject /* this */,
+        jlong context_ptr,
+        jstring text_to_tokenize,
+        jboolean add_bos) {
+    // Get the context pointer from the jlong
+    auto *context = reinterpret_cast<llama_context *>(context_ptr);
+    if (!context) {
+        return env->NewIntArray(0); // Return empty array if context is invalid
+    }
+
+    // Convert the Java string to a C++ string
+    const char *text_chars = env->GetStringUTFChars(text_to_tokenize, nullptr);
+    std::string text(text_chars);
+    env->ReleaseStringUTFChars(text_to_tokenize, text_chars);
+
+    // **THE FIX:** Use the existing 'common_tokenize' helper function from common.h
+    // This is the same function used elsewhere in your file.
+    bool parse_special = false; // We don't need to parse special tokens for this
+    const std::vector<llama_token> tokens_list = common_tokenize(context, text, add_bos, parse_special);
+
+    // Create a new Java integer array to hold the results
+    jintArray result = env->NewIntArray(tokens_list.size());
+
+    if (!tokens_list.empty()) {
+        // Copy the C++ vector data into the Java array
+        // A cast is safe here because llama_token is an int32_t, same as jint
+        env->SetIntArrayRegion(result, 0, tokens_list.size(), reinterpret_cast<const jint *>(tokens_list.data()));
+    }
+
+    return result;
+}

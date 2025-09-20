@@ -11,6 +11,31 @@ import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 
 class LLamaAndroid {
+
+    // ADD THIS: Gets the context size (n_ctx) of the loaded model
+    private external fun model_n_ctx(context: Long): Int
+
+    // ADD THIS: Converts text to tokens. The 'add_bos' adds a 'begin-of-sentence' token.
+    private external fun tokenize(context: Long, text: String, add_bos: Boolean): IntArray
+    // ADD THIS public function to get the context size
+    suspend fun getContextSize(): Int {
+        return withContext(runLoop) {
+            when (val state = threadLocalState.get()) {
+                is State.Loaded -> model_n_ctx(state.context)
+                else -> throw IllegalStateException("Model not loaded")
+            }
+        }
+    }
+
+    // ADD THIS public function to tokenize text
+    suspend fun tokenize(text: String): IntArray {
+        return withContext(runLoop) {
+            when (val state = threadLocalState.get()) {
+                is State.Loaded -> tokenize(state.context, text, true)
+                else -> throw IllegalStateException("Model not loaded")
+            }
+        }
+    }
     private val tag: String? = this::class.simpleName
 
     private val threadLocalState: ThreadLocal<State> = ThreadLocal.withInitial { State.Idle }
