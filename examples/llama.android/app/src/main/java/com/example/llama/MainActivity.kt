@@ -141,6 +141,11 @@ class MainActivity(
             binding.downloadableModelsContainer.addView(button)
         }
 
+        binding.streamingSwitch.isChecked = viewModel.isStreamingEnabled
+        binding.streamingSwitch.setOnCheckedChangeListener { _, isChecked ->
+            viewModel.setStreaming(isChecked)
+        }
+
         viewModel.initializeModelStates(models)
     }
 

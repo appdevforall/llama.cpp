@@ -15,6 +15,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.reduce
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
@@ -43,7 +44,15 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
     )
     val uiMessages: LiveData<List<UiMessage>> get() = _uiMessages
 
-    // Add LiveData for managing the state of each downloadable model
+    // 1. ADD PROPERTY TO HOLD SWITCH STATE (default to true)
+    var isStreamingEnabled = true
+        private set
+
+    // 2. ADD FUNCTION TO UPDATE THE STATE FROM THE ACTIVITY
+    fun setStreaming(isEnabled: Boolean) {
+        isStreamingEnabled = isEnabled
+    }
+
     private val _modelStates = MutableLiveData<Map<String, DownloadUiState>>(emptyMap())
     val modelStates: LiveData<Map<String, DownloadUiState>> get() = _modelStates
 
@@ -144,11 +153,14 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
     fun send() {
         val text = message
         if (text.isBlank()) return
-        message = "" // Clear the input field property
+        message = ""
 
         conversation += text
         addUiMessage(text)
-        addUiMessage("") // Placeholder for the bot's reply
+
+        // Add a different placeholder based on streaming state
+        val placeholderText = if (isStreamingEnabled) "" else "..."
+        addUiMessage(placeholderText)
 
         viewModelScope.launch {
             try {
@@ -163,16 +175,33 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
 
                 val finalPrompt = buildPromptWithHistory(text)
 
-                llamaAndroid.send(finalPrompt)
-                    .catch {
-                        Log.e(tag, "send() failed", it)
-                        val errorMsg = it.message ?: "An unknown error occurred."
-                        updateLastUiMessage(errorMsg)
+                if (isStreamingEnabled) {
+                    llamaAndroid.send(finalPrompt)
+                        .catch { e ->
+                            Log.e(tag, "send() failed", e)
+                            updateLastUiMessage(e.message ?: "An unknown error occurred.")
+                        }
+                        .collect { newTextChunk ->
+                            val currentLastText = _uiMessages.value?.lastOrNull()?.text ?: ""
+                            updateLastUiMessage(currentLastText + newTextChunk)
+                        }
+                } else {
+                    try {
+                        // Use flow.reduce to collect all chunks into one final string
+                        val fullResponse = llamaAndroid.send(finalPrompt)
+                            .reduce { accumulator, value -> accumulator + value }
+                        // Update the UI only once with the full response
+                        updateLastUiMessage(fullResponse)
+                    } catch (e: NoSuchElementException) {
+                        // This catch is important: reduce throws it if the flow is empty.
+                        updateLastUiMessage("Agent returned an empty response.")
+                    } catch (e: Exception) {
+                        // Catch any other errors during the flow collection
+                        Log.e(tag, "send() [non-streaming] failed", e)
+                        updateLastUiMessage(e.message ?: "An unknown error occurred.")
                     }
-                    .collect { newTextChunk ->
-                        val currentLastText = _uiMessages.value?.lastOrNull()?.text ?: ""
-                        updateLastUiMessage(currentLastText + newTextChunk)
-                    }
+                }
+
             } catch (e: IllegalStateException) {
                 updateLastUiMessage("Error: Model not loaded.")
             }

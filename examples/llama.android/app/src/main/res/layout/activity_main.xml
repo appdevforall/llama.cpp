@@ -73,6 +73,13 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Copy"/>
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/streamingSwitch"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Stream"
+            android:checked="true" />
     </LinearLayout>
 
     <LinearLayout
