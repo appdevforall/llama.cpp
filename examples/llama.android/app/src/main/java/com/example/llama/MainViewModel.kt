@@ -230,15 +230,10 @@ class MainViewModel(
 
     private suspend fun runAgentLoop(maxTurns: Int = 5) {
         var currentTurn = 0
-
-        // This is a new variable to accumulate the full conversation for the prompt
         var fullPromptHistory = buildPromptWithHistory(conversation)
 
         while (currentTurn < maxTurns) {
             val isFinalAnswerTurn = currentTurn > 0
-
-            // --- Get model response ---
-            // Stop tokens are crucial for controlling the output.
             val stopStrings = if (isFinalAnswerTurn) {
                 listOf("<|eot_id|>")
             } else {
@@ -249,7 +244,6 @@ class MainViewModel(
             Log.d("AgentDebug", "Final Prompt Sent:\n$fullPromptHistory")
 
             val modelResponse = try {
-                // We clear the cache before EVERY call now, because we are sending the full history
                 llamaAndroid.clearKvCache()
                 withContext(Dispatchers.IO) {
                     llamaAndroid.send(fullPromptHistory, stop = stopStrings)
@@ -259,57 +253,66 @@ class MainViewModel(
                 Log.e("AgentLoop", "Model inference failed", e)
                 "Error: Could not get a response from the model."
             }
-
             Log.d("AgentDebug", "Raw Model Result: \"$modelResponse\"")
 
-            // --- Process and update UI ---
-// NEW: Find the end of the tool call and trim the response
-            val toolCallEndIndex = modelResponse.indexOf("</tool_call>")
-            val trimmedModelResponse = if (toolCallEndIndex != -1) {
-                modelResponse.substring(0, toolCallEndIndex + "</tool_call>".length)
-            } else {
-                modelResponse
-            }
-            updateLastMessage(trimmedModelResponse)
+            // Check for tool calls first
+            val toolCall = parseToolCall(modelResponse)
 
-            // --- Check for tool calls ---
-            val toolCall = parseToolCall(trimmedModelResponse)
             if (toolCall != null) {
+                // --- A TOOL CALL WAS FOUND ---
+
+                // 1. Trim the response to only include the tool call
+                val toolCallEndIndex = modelResponse.indexOf("</tool_call>")
+                val trimmedResponse =
+                    modelResponse.substring(0, toolCallEndIndex + "</tool_call>".length)
+
+                // 2. Update the first model placeholder with the tool call text
+                updateLastMessage(trimmedResponse)
                 Log.d("AgentDebug", "Tool Call Detected: $toolCall")
+
                 val tool = tools[toolCall.toolName]
                 if (tool != null) {
                     val result = tool.execute(getApplication(), toolCall.args)
                     Log.d("AgentDebug", "Tool Response: \"$result\"")
+
+                    // 3. Add the SYSTEM message with the tool result
                     addMessage(result, MessageType.SYSTEM)
 
-                    // *** THE KEY CHANGE IS HERE ***
-                    // We append the assistant's response and the tool result to our prompt history
-                    // to prepare for the next turn.
-                    fullPromptHistory += "$trimmedModelResponse<|eot_id|>"
+                    // 4. IMPORTANT: Add a NEW placeholder for the final answer
+                    addMessage("", MessageType.MODEL)
+
+                    // 5. Prepare the prompt for the next turn
+                    fullPromptHistory += "$trimmedResponse<|eot_id|>"
                     fullPromptHistory += """
-        <|start_header_id|>user<|end_header_id|>
+                <|start_header_id|>user<|end_header_id|>
 
-        [TOOL_RESULT]
-        $result
-        [/TOOL_RESULT]<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+                [TOOL_RESULT]
+                $result
+                [/TOOL_RESULT]<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
-        Based on the tool results, here is the answer to the user's question:
-        """.trimIndent()
+                Based on the tool results, here is the answer to the user's question:
+                """.trimIndent()
 
                 } else {
                     val errorMsg = "Error: Model tried to call unknown tool '${toolCall.toolName}'"
-                    addMessage(errorMsg, MessageType.SYSTEM)
+                    updateLastMessage(errorMsg) // Update placeholder with error
                     Log.e("AgentDebug", errorMsg)
-                    break
+                    break // Exit loop on error
                 }
             } else {
+                // --- NO TOOL CALL FOUND: THIS IS THE FINAL ANSWER ---
+
+                // 1. Update the LAST message (which is our new empty placeholder)
+                //    with the final model response.
+                updateLastMessage(modelResponse)
                 Log.d("AgentDebug", "No tool call detected. Concluding.")
+
+                // 2. Exit the loop
                 break
             }
             currentTurn++
         }
     }
-
 
     private fun parseToolCall(text: String): ToolCall? {
         val pattern = Pattern.compile("<tool_call>(.*?)</tool_call>", Pattern.DOTALL)
