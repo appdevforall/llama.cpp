@@ -16,9 +16,11 @@ import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.reduce
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -132,24 +134,10 @@ class MainViewModel(
 
     var message: String = ""
 
-    private fun addUiMessage(text: String, type: MessageType) {
+    private fun addMessage(text: String, type: MessageType) {
         val message = UiMessage(messageIdCounter.getAndIncrement(), text, type)
-        val currentMessages = _uiMessages.value.orEmpty().toMutableList()
-
-        // Simple add logic for now, as streaming the final answer would require more state
-        currentMessages.add(message)
-
         conversation = conversation + message
-        _uiMessages.postValue(currentMessages)
-    }
-
-    private fun updateLastUiMessage(updatedText: String) {
-        val currentMessages = _uiMessages.value.orEmpty()
-        if (currentMessages.isNotEmpty()) {
-            val lastMessage = currentMessages.last()
-            val updatedMessage = lastMessage.copy(text = updatedText)
-            _uiMessages.value = currentMessages.dropLast(1) + updatedMessage
-        }
+        _uiMessages.postValue(conversation)
     }
 
     fun initializeModelStates(models: List<Downloadable>) {
@@ -167,7 +155,7 @@ class MainViewModel(
             try {
                 llamaAndroid.unload()
             } catch (exc: IllegalStateException) {
-                addUiMessage(exc.message!!, MessageType.SYSTEM)
+                addMessage(exc.message!!, MessageType.SYSTEM)
             }
         }
     }
@@ -200,16 +188,16 @@ class MainViewModel(
     fun loadModelFromUri(uri: Uri, context: Context) {
         viewModelScope.launch {
             try {
-                val fileName = getFileName(context, uri)
-                log("Preparing to copy '$fileName' from storage...")
-                val destinationFile = File(context.cacheDir, fileName)
-
-                context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                    FileOutputStream(destinationFile).use { outputStream ->
-                        inputStream.copyTo(outputStream)
+                val destinationFile = withContext(Dispatchers.IO) {
+                    val fileName = getFileName(context, uri)
+                    val dest = File(context.cacheDir, fileName)
+                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        FileOutputStream(dest).use { outputStream ->
+                            inputStream.copyTo(outputStream)
+                        }
                     }
+                    dest
                 }
-
                 log("Model copied to cache. Loading...")
                 load(destinationFile.path)
 
@@ -225,38 +213,40 @@ class MainViewModel(
         if (text.isBlank()) return
         message = ""
 
-        addUiMessage(text, MessageType.USER)
+        addMessage(text, MessageType.USER)
 
-        // Start the agent loop
+        // Add a placeholder for the model's response
+        val placeholder = if (isStreamingEnabled) "" else "..."
+        addMessage(placeholder, MessageType.MODEL)
+
         viewModelScope.launch {
-            runAgentLoop(text)
+            runAgentLoop()
         }
     }
 
-    private suspend fun runAgentLoop(initialUserMessage: String, maxTurns: Int = 5) {
+    private suspend fun runAgentLoop(maxTurns: Int = 5) {
         var currentTurn = 0
-        var lastModelResponse = ""
 
         while (currentTurn < maxTurns) {
             val prompt = buildPromptWithHistory()
-            Log.d("AgentLoop", "Turn ${currentTurn + 1}, sending prompt:\n$prompt")
+            Log.d("AgentLoop", "Turn ${currentTurn + 1}, sending prompt.")
 
-            // For agent reasoning, we process the full response at once.
+            // Always process agent reasoning as a single block
             val modelResponse = try {
-                llamaAndroid.send(prompt).reduce { acc, s -> acc + s }
+                withContext(Dispatchers.IO) { // Ensure heavy model inference is off the main thread
+                    llamaAndroid.send(prompt).reduce { acc, s -> acc + s }
+                }
             } catch (e: Exception) {
+                Log.e("AgentLoop", "Model inference failed", e)
                 "Error: Could not get a response from the model."
             }
 
-            // The model might output its reasoning before the tool call. Display it.
-            // If streaming is on, we stream the *final* answer later.
-            if (currentTurn > 0) {
-                addUiMessage(modelResponse, MessageType.MODEL)
+            // On the first turn, we UPDATE the placeholder. On subsequent turns, we ADD a new message.
+            if (currentTurn == 0) {
+                updateLastMessage(modelResponse)
             } else {
-                // For the first turn, create the initial placeholder
-                addUiMessage(modelResponse, MessageType.MODEL)
+                addMessage(modelResponse, MessageType.MODEL)
             }
-            lastModelResponse = modelResponse
 
             val toolCall = parseToolCall(modelResponse)
             if (toolCall != null) {
@@ -264,13 +254,10 @@ class MainViewModel(
                 val tool = tools[toolCall.toolName]
                 if (tool != null) {
                     val result = tool.execute(getApplication(), toolCall.args)
-                    // Add tool result to history as a system message
-                    addUiMessage(result, MessageType.SYSTEM)
+                    addMessage(result, MessageType.SYSTEM) // Add tool result to history
                 } else {
-                    addUiMessage(
-                        "Error: Model tried to call unknown tool '${toolCall.toolName}'",
-                        MessageType.SYSTEM
-                    )
+                    val errorMsg = "Error: Model tried to call unknown tool '${toolCall.toolName}'"
+                    addMessage(errorMsg, MessageType.SYSTEM)
                     break // Exit loop if tool is invalid
                 }
             } else {
@@ -279,18 +266,8 @@ class MainViewModel(
             }
             currentTurn++
         }
-
-        // If the loop finished and the last response was a tool call, get a final answer.
-        if (parseToolCall(lastModelResponse) != null) {
-            val finalPrompt = buildPromptWithHistory()
-            val finalAnswer = try {
-                llamaAndroid.send(finalPrompt).reduce { acc, s -> acc + s }
-            } catch (e: Exception) {
-                "Done."
-            }
-            addUiMessage(finalAnswer, MessageType.MODEL)
-        }
     }
+
 
     private fun parseToolCall(text: String): ToolCall? {
         val pattern = Pattern.compile("<tool_call>(.*?)</tool_call>", Pattern.DOTALL)
@@ -330,20 +307,20 @@ class MainViewModel(
                 val warmupResult = llamaAndroid.bench(pp, tg, pl, nr)
                 val end = System.nanoTime()
 
-                addUiMessage(warmupResult, MessageType.MODEL)
+                addMessage(warmupResult, MessageType.MODEL)
 
                 val warmup = (end - start).toDouble() / NanosPerSecond
-                addUiMessage("Warm up time: $warmup seconds, please wait...", MessageType.SYSTEM)
+                addMessage("Warm up time: $warmup seconds, please wait...", MessageType.SYSTEM)
 
                 if (warmup > 5.0) {
-                    addUiMessage("Warm up took too long, aborting benchmark", MessageType.SYSTEM)
+                    addMessage("Warm up took too long, aborting benchmark", MessageType.SYSTEM)
                     return@launch
                 }
 
-                addUiMessage(llamaAndroid.bench(512, 128, 1, 3), MessageType.SYSTEM)
+                addMessage(llamaAndroid.bench(512, 128, 1, 3), MessageType.SYSTEM)
             } catch (exc: IllegalStateException) {
                 Log.e(tag, "bench() failed", exc)
-                addUiMessage(exc.message!!, MessageType.SYSTEM)
+                addMessage(exc.message!!, MessageType.SYSTEM)
             }
         }
     }
@@ -351,17 +328,27 @@ class MainViewModel(
     fun load(pathToModel: String) {
         viewModelScope.launch {
             try {
-                llamaAndroid.load(pathToModel)
-                addUiMessage("Loaded $pathToModel", MessageType.SYSTEM)
-                _contextSize.value = llamaAndroid.getContextSize()
-                addUiMessage("Model context size: ${contextSize.value} tokens", MessageType.SYSTEM)
+                withContext(Dispatchers.IO) {
+                    llamaAndroid.load(pathToModel)
+                }
+                log("Loaded $pathToModel")
+                val contextSize = llamaAndroid.getContextSize()
+                log("Model context size: $contextSize tokens")
             } catch (exc: IllegalStateException) {
-                Log.e(tag, "load() failed", exc)
-                addUiMessage(exc.message!!, MessageType.SYSTEM)
+                Log.e("ModelLoad", "load() failed", exc)
+                log(exc.message!!)
             }
         }
     }
 
+    private fun updateLastMessage(updatedText: String) {
+        if (conversation.isNotEmpty()) {
+            val lastMessage = conversation.last()
+            val updatedMessage = lastMessage.copy(text = updatedText)
+            conversation = conversation.dropLast(1) + updatedMessage
+            _uiMessages.postValue(conversation)
+        }
+    }
     fun updateMessage(newMessage: String) {
         message = newMessage
     }
@@ -372,15 +359,20 @@ class MainViewModel(
     }
 
     fun log(message: String) {
-        addUiMessage(message, MessageType.SYSTEM)
+        addMessage(message, MessageType.SYSTEM)
     }
 
     private fun buildPromptWithHistory(): String {
-        // Prepend the detailed system prompt
         val historyString = conversation.joinToString(separator = "\n") {
-            "[${it.type}] ${it.text}"
+            // Simple format for the model to understand roles
+            when (it.type) {
+                MessageType.USER -> "USER: ${it.text}"
+                MessageType.MODEL -> "ASSISTANT: ${it.text}"
+                MessageType.SYSTEM -> "SYSTEM: ${it.text}"
+            }
         }
-        return "$masterSystemPrompt\n$historyString"
+        // The final instruction for the assistant
+        return "$masterSystemPrompt\n$historyString\nASSISTANT:"
     }
 
     fun onDownloadableClicked(item: Downloadable, dm: DownloadManager) {
