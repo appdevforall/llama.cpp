@@ -3,8 +3,8 @@ package com.example.llama
 import android.app.DownloadManager
 import android.content.Context
 import android.database.Cursor
-import android.net.Uri
 import android.llama.cpp.LLamaAndroid
+import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
 import androidx.core.database.getLongOrNull
@@ -18,8 +18,10 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.atomic.AtomicLong
 
-// A new state class to represent the UI state of a downloadable model
+data class UiMessage(val id: Long, val text: String)
+
 sealed interface DownloadUiState {
     data object Ready : DownloadUiState
     data class Downloading(val progress: Int) : DownloadUiState // Progress as Int 0-100
@@ -28,8 +30,7 @@ sealed interface DownloadUiState {
 }
 
 class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instance()) : ViewModel() {
-
-    // Change contextSize to use LiveData or a simple property
+    private val messageIdCounter = AtomicLong(0)
     private val _contextSize = MutableLiveData(0)
     val contextSize: LiveData<Int> get() = _contextSize
 
@@ -37,8 +38,10 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
         private set
 
     // Change uiMessages to use LiveData
-    private val _uiMessages = MutableLiveData<List<String>>(listOf("Initializing..."))
-    val uiMessages: LiveData<List<String>> get() = _uiMessages
+    private val _uiMessages = MutableLiveData<List<UiMessage>>(
+        listOf(UiMessage(id = messageIdCounter.getAndIncrement(), text = "Initializing..."))
+    )
+    val uiMessages: LiveData<List<UiMessage>> get() = _uiMessages
 
     // Add LiveData for managing the state of each downloadable model
     private val _modelStates = MutableLiveData<Map<String, DownloadUiState>>(emptyMap())
@@ -56,17 +59,17 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
     // Remove `by mutableStateOf` delegate, use a simple property
     var message: String = ""
 
-    // Helper to update LiveData list
-    private fun addUiMessage(newMessage: String) {
-        _uiMessages.value = _uiMessages.value.orEmpty() + newMessage
+    private fun addUiMessage(newMessageText: String) {
+        val message = UiMessage(id = messageIdCounter.getAndIncrement(), text = newMessageText)
+        _uiMessages.value = _uiMessages.value.orEmpty() + message
     }
 
-    // Helper to replace the last UI message (for streaming responses)
-    private fun updateLastUiMessage(updatedMessage: String) {
-        val current = _uiMessages.value.orEmpty().toMutableList()
-        if (current.isNotEmpty()) {
-            current[current.size - 1] = updatedMessage
-            _uiMessages.value = current
+    private fun updateLastUiMessage(updatedText: String) {
+        val currentMessages = _uiMessages.value.orEmpty()
+        if (currentMessages.isNotEmpty()) {
+            val lastMessage = currentMessages.last()
+            val updatedMessage = lastMessage.copy(text = updatedText)
+            _uiMessages.value = currentMessages.dropLast(1) + updatedMessage
         }
     }
 
@@ -167,12 +170,8 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
                         updateLastUiMessage(errorMsg)
                     }
                     .collect { newTextChunk ->
-                        if (conversation.lastOrNull()?.endsWith(uiMessages.value?.last().orEmpty()) == false) {
-                            conversation = conversation.dropLast(1) + (conversation.last() + newTextChunk)
-                        } else {
-                            conversation = conversation.dropLast(1) + (conversation.last() + newTextChunk)
-                        }
-                        updateLastUiMessage(uiMessages.value?.last().orEmpty() + newTextChunk)
+                        val currentLastText = _uiMessages.value?.lastOrNull()?.text ?: ""
+                        updateLastUiMessage(currentLastText + newTextChunk)
                     }
             } catch (e: IllegalStateException) {
                 updateLastUiMessage("Error: Model not loaded.")

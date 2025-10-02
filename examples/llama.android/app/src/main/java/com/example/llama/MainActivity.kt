@@ -114,7 +114,9 @@ class MainActivity(
         binding.benchButton.setOnClickListener { viewModel.bench(8, 4, 1) }
         binding.clearButton.setOnClickListener { viewModel.clear() }
         binding.copyButton.setOnClickListener {
-            val textToCopy = viewModel.uiMessages.value?.joinToString("\n").orEmpty()
+            val textToCopy = viewModel.uiMessages.value
+                ?.joinToString("\n") { it.text }
+                .orEmpty()
             clipboardManager.setPrimaryClip(ClipData.newPlainText("conversation", textToCopy))
         }
         binding.loadFileButton.setOnClickListener {
