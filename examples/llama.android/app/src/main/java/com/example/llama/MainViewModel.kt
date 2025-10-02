@@ -213,9 +213,12 @@ class MainViewModel(
         if (text.isBlank()) return
         message = ""
 
+        // <<< LOG 1: The initial user input >>>
+        Log.d("AgentDebug", "--- NEW REQUEST ---")
+        Log.d("AgentDebug", "User Input: \"$text\"")
+
         addMessage(text, MessageType.USER)
 
-        // Add a placeholder for the model's response
         val placeholder = if (isStreamingEnabled) "" else "..."
         addMessage(placeholder, MessageType.MODEL)
 
@@ -229,11 +232,11 @@ class MainViewModel(
         var currentTurn = 0
 
         while (currentTurn < maxTurns) {
-            val prompt: String
             val isFinalAnswerTurn = currentTurn > 0
+            val prompt: String
 
+            // --- Construct the prompt for the current turn ---
             if (currentTurn == 0) {
-                // On the FIRST turn, build the full prompt with the complete history.
                 prompt = buildPromptWithHistory(conversation)
                 Log.d("AgentLoop", "Turn 1: Sending full prompt.")
             } else {
@@ -260,6 +263,10 @@ class MainViewModel(
                 Log.d("AgentLoop", "Turn ${currentTurn + 1}: Sending incremental prompt.")
             }
 
+            // <<< LOG 2: The exact prompt being sent to the model >>>
+            Log.d("AgentDebug", "--- [Step ${currentTurn + 1}] ---")
+            Log.d("AgentDebug", "Final Prompt Sent:\n$prompt")
+
             // Stop tokens are crucial for controlling the output.
             val stopStrings = if (isFinalAnswerTurn) {
                 listOf("<|eot_id|>")
@@ -267,6 +274,7 @@ class MainViewModel(
                 listOf("<|eot_id|>", "</tool_call>")
             }
 
+            // --- Get model response ---
             val modelResponse = try {
                 withContext(Dispatchers.IO) {
                     llamaAndroid.send(prompt, stop = stopStrings).reduce { acc, s -> acc + s }
@@ -276,29 +284,36 @@ class MainViewModel(
                 "Error: Could not get a response from the model."
             }
 
-            // Add the model's response to the conversation history.
-            if (currentTurn == 0) {
-                updateLastMessage(modelResponse) // Update the placeholder
-            } else {
-                updateLastMessage(modelResponse) // Replace the tool call with the final answer
-            }
+            // <<< LOG 3: The raw result from the model >>>
+            Log.d("AgentDebug", "Raw Model Result: \"$modelResponse\"")
 
-            // Check if the model's response was another tool call.
-            val toolCall = parseToolCall(modelResponse)
+            // --- Process and update UI ---
+            val completeModelResponse =
+                modelResponse + if (stopStrings.contains("<|eot_id|>")) "<|eot_id|>" else ""
+            updateLastMessage(completeModelResponse)
+
+            // --- Check for tool calls ---
+            val toolCall = parseToolCall(completeModelResponse)
             if (toolCall != null) {
-                Log.d("AgentLoop", "Tool call detected: $toolCall")
+                Log.d("AgentDebug", "Tool Call Detected: $toolCall")
                 val tool = tools[toolCall.toolName]
                 if (tool != null) {
                     val result = tool.execute(getApplication(), toolCall.args)
+
+                    // <<< LOG 4: The result from the executed tool >>>
+                    Log.d("AgentDebug", "Tool Response: \"$result\"")
+
                     addMessage(result, MessageType.SYSTEM)
                 } else {
                     val errorMsg = "Error: Model tried to call unknown tool '${toolCall.toolName}'"
                     addMessage(errorMsg, MessageType.SYSTEM)
-                    break // Exit loop on error
+                    Log.e("AgentDebug", errorMsg)
+                    break
                 }
             } else {
-                Log.d("AgentLoop", "No tool call detected. Concluding.")
-                break // This is the final answer, exit the loop.
+                // <<< LOG 5: The final conclusion >>>
+                Log.d("AgentDebug", "No tool call detected. Concluding.")
+                break
             }
             currentTurn++
         }
