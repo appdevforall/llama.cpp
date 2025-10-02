@@ -27,10 +27,9 @@ class MainActivity(
     activityManager: ActivityManager? = null,
     downloadManager: DownloadManager? = null,
     clipboardManager: ClipboardManager? = null,
-) : AppCompatActivity() { // Change to AppCompatActivity
+) : AppCompatActivity() {
     private val tag: String? = this::class.simpleName
 
-    // Use ViewBinding
     private lateinit var binding: ActivityMainBinding
     private lateinit var messageAdapter: MessageAdapter
 
@@ -41,6 +40,9 @@ class MainActivity(
     private val viewModel: MainViewModel by viewModels()
     private lateinit var filePickerLauncher: ActivityResultLauncher<Array<String>>
 
+    // CHANGE 1: Declare 'models' as a class property
+    private lateinit var models: List<Downloadable>
+
     private fun availableMemory(): ActivityManager.MemoryInfo {
         return ActivityManager.MemoryInfo().also { memoryInfo ->
             activityManager.getMemoryInfo(memoryInfo)
@@ -49,7 +51,6 @@ class MainActivity(
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Inflate layout with ViewBinding
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -79,7 +80,8 @@ class MainActivity(
         viewModel.log("Downloads directory: ${getExternalFilesDir(null)}")
 
         val extFilesDir = getExternalFilesDir(null)!!
-        val models = listOf(
+
+        models = listOf(
             Downloadable(
                 "Phi-2 7B (Q4_0, 1.6 GiB)",
                 Uri.parse("https://huggingface.co/ggml-org/models/resolve/main/phi-2/ggml-model-q4_0.gguf?download=true"),
@@ -97,19 +99,17 @@ class MainActivity(
             ),
         )
 
-        setupUI(models)
+        setupUI() // No longer need to pass 'models'
         observeViewModel()
     }
 
-    private fun setupUI(models: List<Downloadable>) {
-        // Setup RecyclerView
+    private fun setupUI() { // No longer need to receive 'models'
         messageAdapter = MessageAdapter()
         binding.messagesRecyclerView.apply {
             adapter = messageAdapter
             layoutManager = LinearLayoutManager(this@MainActivity)
         }
 
-        // Setup Buttons
         binding.sendButton.setOnClickListener { send() }
         binding.benchButton.setOnClickListener { viewModel.bench(8, 4, 1) }
         binding.clearButton.setOnClickListener { viewModel.clear() }
@@ -122,7 +122,6 @@ class MainActivity(
         }
         binding.loadSavedButton.setOnClickListener { loadFromSaved() }
 
-        // Handle keyboard send action
         binding.messageEditText.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEND) {
                 send()
@@ -131,56 +130,53 @@ class MainActivity(
             false
         }
 
-        // Dynamically create download buttons
         binding.downloadableModelsContainer.removeAllViews()
         models.forEach { model ->
             val button = Button(this).apply {
-                text = model.name // Initial text
+                text = model.name
                 setOnClickListener { viewModel.onDownloadableClicked(model, downloadManager) }
             }
             binding.downloadableModelsContainer.addView(button)
         }
 
-        // Initialize model states in ViewModel
         viewModel.initializeModelStates(models)
     }
 
     private fun observeViewModel() {
         viewModel.uiMessages.observe(this) { messages ->
             messageAdapter.submitList(messages) {
-                // Scroll to the bottom on new message
                 binding.messagesRecyclerView.scrollToPosition(messages.size - 1)
             }
         }
 
-//        viewModel.modelStates.observe(this) { states ->
-//            // Assumes buttons are added in the same order as the models list
-//            models.forEachIndexed { index, model ->
-//                val button = binding.downloadableModelsContainer.getChildAt(index) as? Button
-//                val state = states[model.name]
-//                button?.let {
-//                    when (state) {
-//                        is DownloadUiState.Ready -> {
-//                            it.text = "Download ${model.name}"
-//                            it.isEnabled = true
-//                        }
-//                        is DownloadUiState.Downloading -> {
-//                            it.text = "Downloading ${state.progress}%"
-//                            it.isEnabled = false
-//                        }
-//                        is DownloadUiState.Downloaded -> {
-//                            it.text = "Load ${model.name}"
-//                            it.isEnabled = true
-//                        }
-//                        is DownloadUiState.Error -> {
-//                            it.text = "Error! Retry ${model.name}"
-//                            it.isEnabled = true
-//                        }
-//                        null -> {}
-//                    }
-//                }
-//            }
-//        }
+        viewModel.modelStates.observe(this) { states ->
+            // This now works perfectly!
+            models.forEachIndexed { index, model ->
+                val button = binding.downloadableModelsContainer.getChildAt(index) as? Button
+                val state = states[model.name]
+                button?.let {
+                    when (state) {
+                        is DownloadUiState.Ready -> {
+                            it.text = "Download ${model.name}"
+                            it.isEnabled = true
+                        }
+                        is DownloadUiState.Downloading -> {
+                            it.text = "Downloading ${state.progress}%"
+                            it.isEnabled = false
+                        }
+                        is DownloadUiState.Downloaded -> {
+                            it.text = "Load ${model.name}"
+                            it.isEnabled = true
+                        }
+                        is DownloadUiState.Error -> {
+                            it.text = "Error! Retry ${model.name}"
+                            it.isEnabled = true
+                        }
+                        null -> {}
+                    }
+                }
+            }
+        }
     }
 
     private fun send() {
