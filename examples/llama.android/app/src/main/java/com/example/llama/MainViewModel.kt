@@ -17,12 +17,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.reduce
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicLong
+import java.util.regex.Pattern
 
 class MainViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -35,6 +36,31 @@ class MainViewModelFactory(private val application: Application) : ViewModelProv
         throw IllegalArgumentException("Unknown ViewModel class")
     }
 }
+
+private data class ToolCall(val toolName: String, val args: Map<String, Any>)
+
+// THE NEW SYSTEM PROMPT
+private const val SYSTEM_PROMPT = """
+You are a helpful and smart assistant integrated into an Android application.
+You have access to the following tools to get real-time information. Do not make up information for these tools.
+
+[AVAILABLE_TOOLS]
+
+To use a tool, you must respond with a JSON object inside a special <tool_call> tag. Your response should contain nothing else.
+The JSON object must have "tool_name" and "args" keys.
+"args" must be an object containing the arguments for the tool. If no arguments are needed, use an empty object {}.
+
+Example of a tool call:
+<tool_call>
+{
+  "tool_name": "get_current_datetime",
+  "args": {}
+}
+</tool_call>
+
+After the tool is called, you will receive the result and you must use it to answer the user's original question.
+"""
+
 enum class MessageType {
     SYSTEM, USER, MODEL
 }
@@ -59,12 +85,12 @@ class MainViewModel(
     private val messageIdCounter = AtomicLong(0)
     private val _contextSize = MutableLiveData(0)
     val contextSize: LiveData<Int> get() = _contextSize
-    private val tools: List<Tool> = listOf(
-        BatteryTool()
-    )
+    private val tools: Map<String, Tool> = listOf(
+        BatteryTool(),
+        GetDateTimeTool()
+    ).associateBy { it.name }
 
-    var conversation = listOf<String>()
-        private set
+    var conversation = listOf<UiMessage>()
 
     private val _uiMessages = MutableLiveData<List<UiMessage>>(
         listOf(
@@ -82,6 +108,11 @@ class MainViewModel(
 
     fun setStreaming(isEnabled: Boolean) {
         isStreamingEnabled = isEnabled
+    }
+
+    private val masterSystemPrompt: String by lazy {
+        val toolDescriptions = tools.values.joinToString("\n") { "- ${it.name}: ${it.description}" }
+        SYSTEM_PROMPT.replace("[AVAILABLE_TOOLS]", toolDescriptions)
     }
 
     private val _savedModelUri = MutableLiveData<Uri?>(null)
@@ -102,8 +133,14 @@ class MainViewModel(
     var message: String = ""
 
     private fun addUiMessage(text: String, type: MessageType) {
-        val message = UiMessage(id = messageIdCounter.getAndIncrement(), text = text, type = type)
-        _uiMessages.value = _uiMessages.value.orEmpty() + message
+        val message = UiMessage(messageIdCounter.getAndIncrement(), text, type)
+        val currentMessages = _uiMessages.value.orEmpty().toMutableList()
+
+        // Simple add logic for now, as streaming the final answer would require more state
+        currentMessages.add(message)
+
+        conversation = conversation + message
+        _uiMessages.postValue(currentMessages)
     }
 
     private fun updateLastUiMessage(updatedText: String) {
@@ -188,58 +225,102 @@ class MainViewModel(
         if (text.isBlank()) return
         message = ""
 
-        conversation += text
         addUiMessage(text, MessageType.USER)
 
-        val placeholderText = if (isStreamingEnabled) "" else "..."
-        addUiMessage(placeholderText, MessageType.MODEL)
-
+        // Start the agent loop
         viewModelScope.launch {
-            try {
-                val singleMessageTokens = llamaAndroid.tokenize(text)
-                val maxPromptTokens = (_contextSize.value ?: 0 * (1.0 - CONTEXT_RESERVATION_PERCENT)).toInt()
+            runAgentLoop(text)
+        }
+    }
 
-                if ((_contextSize.value ?: 0) > 0 && singleMessageTokens.size >= maxPromptTokens) {
-                    updateLastUiMessage("Error: Your message is too long to process. Please shorten it.")
-                    Log.e(tag, "Single message is too long. Tokens: ${singleMessageTokens.size}, Max: $maxPromptTokens")
-                    return@launch
-                }
+    private suspend fun runAgentLoop(initialUserMessage: String, maxTurns: Int = 5) {
+        var currentTurn = 0
+        var lastModelResponse = ""
 
-                // CHANGE 3: Execute tools and get the context BEFORE building the prompt
-                val toolContext = executeTools()
+        while (currentTurn < maxTurns) {
+            val prompt = buildPromptWithHistory()
+            Log.d("AgentLoop", "Turn ${currentTurn + 1}, sending prompt:\n$prompt")
 
-                // Pass this new context to the prompt builder
-                val finalPrompt = buildPromptWithHistory(text, toolContext)
+            // For agent reasoning, we process the full response at once.
+            val modelResponse = try {
+                llamaAndroid.send(prompt).reduce { acc, s -> acc + s }
+            } catch (e: Exception) {
+                "Error: Could not get a response from the model."
+            }
 
-                Log.i(tag, "Final prompt with tool context:\n$finalPrompt")
+            // The model might output its reasoning before the tool call. Display it.
+            // If streaming is on, we stream the *final* answer later.
+            if (currentTurn > 0) {
+                addUiMessage(modelResponse, MessageType.MODEL)
+            } else {
+                // For the first turn, create the initial placeholder
+                addUiMessage(modelResponse, MessageType.MODEL)
+            }
+            lastModelResponse = modelResponse
 
-                if (isStreamingEnabled) {
-                    llamaAndroid.send(finalPrompt)
-                        .catch { e ->
-                            Log.e(tag, "send() failed", e)
-                            updateLastUiMessage(e.message ?: "An unknown error occurred.")
-                        }
-                        .collect { newTextChunk ->
-                            val currentLastText = _uiMessages.value?.lastOrNull()?.text ?: ""
-                            updateLastUiMessage(currentLastText + newTextChunk)
-                        }
+            val toolCall = parseToolCall(modelResponse)
+            if (toolCall != null) {
+                Log.d("AgentLoop", "Tool call detected: $toolCall")
+                val tool = tools[toolCall.toolName]
+                if (tool != null) {
+                    val result = tool.execute(getApplication(), toolCall.args)
+                    // Add tool result to history as a system message
+                    addUiMessage(result, MessageType.SYSTEM)
                 } else {
-                    try {
-                        val fullResponse = llamaAndroid.send(finalPrompt)
-                            .reduce { accumulator, value -> accumulator + value }
-                        updateLastUiMessage(fullResponse)
-                    } catch (e: NoSuchElementException) {
-                        updateLastUiMessage("Agent returned an empty response.")
-                    } catch (e: Exception) {
-                        Log.e(tag, "send() [non-streaming] failed", e)
-                        updateLastUiMessage(e.message ?: "An unknown error occurred.")
-                    }
+                    addUiMessage(
+                        "Error: Model tried to call unknown tool '${toolCall.toolName}'",
+                        MessageType.SYSTEM
+                    )
+                    break // Exit loop if tool is invalid
                 }
+            } else {
+                Log.d("AgentLoop", "No tool call detected. Concluding.")
+                break // No tool call found, this is the final answer
+            }
+            currentTurn++
+        }
 
-            } catch (e: IllegalStateException) {
-                updateLastUiMessage("Error: Model not loaded.")
+        // If the loop finished and the last response was a tool call, get a final answer.
+        if (parseToolCall(lastModelResponse) != null) {
+            val finalPrompt = buildPromptWithHistory()
+            val finalAnswer = try {
+                llamaAndroid.send(finalPrompt).reduce { acc, s -> acc + s }
+            } catch (e: Exception) {
+                "Done."
+            }
+            addUiMessage(finalAnswer, MessageType.MODEL)
+        }
+    }
+
+    private fun parseToolCall(text: String): ToolCall? {
+        val pattern = Pattern.compile("<tool_call>(.*?)</tool_call>", Pattern.DOTALL)
+        val matcher = pattern.matcher(text)
+        if (matcher.find()) {
+            val jsonStr = matcher.group(1)?.trim()
+
+            // FIX 1: Add a null/blank check for the extracted string
+            if (jsonStr.isNullOrBlank()) {
+                Log.e("ToolParse", "Found tool_call tags but the content was empty.")
+                return null
+            }
+
+            try {
+                // Now jsonStr is guaranteed to be a non-null String
+                val json = JSONObject(jsonStr)
+                val toolName = json.getString("tool_name")
+                val argsJson = json.getJSONObject("args")
+                val argsMap = mutableMapOf<String, Any>()
+                argsJson.keys().forEach { key ->
+                    argsMap[key] = argsJson.get(key)
+                }
+                // FIX 2: This now matches the updated ToolCall data class
+                return ToolCall(toolName, argsMap)
+            } catch (e: Exception) {
+                Log.e("ToolParse", "Failed to parse tool call JSON", e)
+                return null
             }
         }
+        return null
     }
 
     fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1) {
@@ -294,29 +375,12 @@ class MainViewModel(
         addUiMessage(message, MessageType.SYSTEM)
     }
 
-    private suspend fun buildPromptWithHistory(
-        newUserMessage: String,
-        systemContext: String
-    ): String {
-        val promptTokenBudget = ((contextSize.value ?: 0) * (1.0 - CONTEXT_RESERVATION_PERCENT)).toInt()
-        val conversationHistory = mutableListOf<String>()
-        var totalTokens = 0
-        val newUserMessageTokens = llamaAndroid.tokenize(newUserMessage)
-        totalTokens += newUserMessageTokens.size
-        conversationHistory.add(newUserMessage)
-        for (message in conversation.reversed()) {
-            if (message.isBlank()) continue
-            val messageTokens = llamaAndroid.tokenize(message)
-            if (totalTokens + messageTokens.size > promptTokenBudget) {
-                break
-            }
-            totalTokens += messageTokens.size
-            conversationHistory.add(0, message)
+    private fun buildPromptWithHistory(): String {
+        // Prepend the detailed system prompt
+        val historyString = conversation.joinToString(separator = "\n") {
+            "[${it.type}] ${it.text}"
         }
-        Log.i(tag, "Prompt built with $totalTokens tokens, using ${conversationHistory.size} messages.")
-
-        val historyString = conversationHistory.joinToString(separator = "\n")
-        return "$systemContext\n$historyString"
+        return "$masterSystemPrompt\n$historyString"
     }
 
     fun onDownloadableClicked(item: Downloadable, dm: DownloadManager) {
@@ -405,13 +469,5 @@ class MainViewModel(
 
     fun onNewModelSelected(uri: Uri?) {
         _savedModelUri.value = uri
-    }
-
-    // Helper function to execute tools and gather context
-    private fun executeTools(): String {
-        val context = getApplication<Application>().applicationContext
-        // In the future, you could have logic to decide which tools to run.
-        // For now, we run all of them as per the request.
-        return tools.joinToString("\n") { tool -> tool.execute(context) }
     }
 }

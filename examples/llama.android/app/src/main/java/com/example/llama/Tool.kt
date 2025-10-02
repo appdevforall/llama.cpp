@@ -2,34 +2,47 @@ package com.example.llama
 
 import android.content.Context
 import android.os.BatteryManager
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 /**
  * A generic interface for a tool the model can use.
- * The result is always returned as a String.
  */
 interface Tool {
-    // The name of the tool
     val name: String
-
-    // A description for future use in more advanced agent setups
     val description: String
 
-    // Executes the tool's native code and returns the result as a string.
-    fun execute(context: Context): String
+    // UPDATE: The execute method now accepts a map of arguments.
+    fun execute(context: Context, args: Map<String, Any>): String
 }
 
 /**
  * An implementation of a tool that gets the device's battery level.
+ * It doesn't use arguments, but conforms to the new interface.
  */
 class BatteryTool : Tool {
     override val name: String = "get_device_battery"
     override val description: String = "Returns the current battery percentage of the device."
 
-    override fun execute(context: Context): String {
+    override fun execute(context: Context, args: Map<String, Any>): String {
         val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         val batteryPct = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-
-        // We format the result in a way the model can easily understand is system-provided data.
         return "[Tool Result for $name]: Device battery is at $batteryPct%."
+    }
+}
+
+/**
+ * NEW TOOL: Gets the current date and time.
+ * This is a perfect example of a tool the agent can decide to call.
+ */
+class GetDateTimeTool : Tool {
+    override val name: String = "get_current_datetime"
+    override val description: String = "Returns the current date and time in Quito, Ecuador."
+
+    override fun execute(context: Context, args: Map<String, Any>): String {
+        val currentDateTime = LocalDateTime.now()
+        val formatter = DateTimeFormatter.ofPattern("eeee, MMMM d, yyyy h:mm a")
+        val formatted = currentDateTime.format(formatter)
+        return "[Tool Result for $name]: The current date and time is $formatted."
     }
 }
