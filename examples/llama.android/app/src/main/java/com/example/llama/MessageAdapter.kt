@@ -1,28 +1,79 @@
 package com.example.llama
 
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
+import android.widget.TextView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
-import com.example.llama.databinding.ItemMessageBinding
+
+// Define constants for our view types
+private const val VIEW_TYPE_SYSTEM = 0
+private const val VIEW_TYPE_USER = 1
+private const val VIEW_TYPE_MODEL = 2
 
 class MessageAdapter :
     ListAdapter<UiMessage, MessageAdapter.MessageViewHolder>(MessageDiffCallback()) {
 
+    // A sealed class for our ViewHolders makes the 'when' statement in onBindViewHolder exhaustive
+    sealed class MessageViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+        abstract fun bind(message: UiMessage)
+
+        class SystemMessageViewHolder(view: View) : MessageViewHolder(view) {
+            private val textView: TextView = view.findViewById(R.id.messageTextView)
+            override fun bind(message: UiMessage) {
+                textView.text = message.text
+            }
+        }
+
+        class UserMessageViewHolder(view: View) : MessageViewHolder(view) {
+            private val textView: TextView = view.findViewById(R.id.messageTextView)
+            override fun bind(message: UiMessage) {
+                textView.text = message.text
+            }
+        }
+
+        class ModelMessageViewHolder(view: View) : MessageViewHolder(view) {
+            private val textView: TextView = view.findViewById(R.id.messageTextView)
+            override fun bind(message: UiMessage) {
+                textView.text = message.text
+            }
+        }
+    }
+
+    override fun getItemViewType(position: Int): Int {
+        return when (getItem(position).type) {
+            MessageType.SYSTEM -> VIEW_TYPE_SYSTEM
+            MessageType.USER -> VIEW_TYPE_USER
+            MessageType.MODEL -> VIEW_TYPE_MODEL
+        }
+    }
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MessageViewHolder {
-        val binding = ItemMessageBinding.inflate(LayoutInflater.from(parent.context), parent, false)
-        return MessageViewHolder(binding)
+        val inflater = LayoutInflater.from(parent.context)
+        return when (viewType) {
+            VIEW_TYPE_SYSTEM -> {
+                val view = inflater.inflate(R.layout.item_message_system, parent, false)
+                MessageViewHolder.SystemMessageViewHolder(view)
+            }
+
+            VIEW_TYPE_USER -> {
+                val view = inflater.inflate(R.layout.item_message_user, parent, false)
+                MessageViewHolder.UserMessageViewHolder(view)
+            }
+
+            VIEW_TYPE_MODEL -> {
+                val view = inflater.inflate(R.layout.item_message_model, parent, false)
+                MessageViewHolder.ModelMessageViewHolder(view)
+            }
+
+            else -> throw IllegalArgumentException("Unknown viewType: $viewType")
+        }
     }
 
     override fun onBindViewHolder(holder: MessageViewHolder, position: Int) {
         holder.bind(getItem(position))
-    }
-
-    class MessageViewHolder(private val binding: ItemMessageBinding) : RecyclerView.ViewHolder(binding.root) {
-        fun bind(message: UiMessage) {
-            binding.messageTextView.text = message.text
-        }
     }
 
     class MessageDiffCallback : DiffUtil.ItemCallback<UiMessage>() {
@@ -31,7 +82,8 @@ class MessageAdapter :
         }
 
         override fun areContentsTheSame(oldItem: UiMessage, newItem: UiMessage): Boolean {
-            return oldItem.text == newItem.text
+            // Check both text and type for content changes
+            return oldItem.text == newItem.text && oldItem.type == newItem.type
         }
     }
 }

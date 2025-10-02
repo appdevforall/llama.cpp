@@ -21,7 +21,15 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicLong
 
-data class UiMessage(val id: Long, val text: String)
+enum class MessageType {
+    SYSTEM, USER, MODEL
+}
+
+data class UiMessage(
+    val id: Long,
+    val text: String,
+    val type: MessageType
+)
 
 sealed interface DownloadUiState {
     data object Ready : DownloadUiState
@@ -40,7 +48,13 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
 
     // Change uiMessages to use LiveData
     private val _uiMessages = MutableLiveData<List<UiMessage>>(
-        listOf(UiMessage(id = messageIdCounter.getAndIncrement(), text = "Initializing..."))
+        listOf(
+            UiMessage(
+                id = messageIdCounter.getAndIncrement(),
+                text = "Initializing...",
+                type = MessageType.SYSTEM
+            )
+        )
     )
     val uiMessages: LiveData<List<UiMessage>> get() = _uiMessages
 
@@ -71,8 +85,8 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
     // Remove `by mutableStateOf` delegate, use a simple property
     var message: String = ""
 
-    private fun addUiMessage(newMessageText: String) {
-        val message = UiMessage(id = messageIdCounter.getAndIncrement(), text = newMessageText)
+    private fun addUiMessage(text: String, type: MessageType) {
+        val message = UiMessage(id = messageIdCounter.getAndIncrement(), text = text, type = type)
         _uiMessages.value = _uiMessages.value.orEmpty() + message
     }
 
@@ -100,7 +114,7 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
             try {
                 llamaAndroid.unload()
             } catch (exc: IllegalStateException) {
-                addUiMessage(exc.message!!)
+                addUiMessage(exc.message!!, MessageType.SYSTEM)
             }
         }
     }
@@ -159,11 +173,11 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
         message = ""
 
         conversation += text
-        addUiMessage(text)
+        addUiMessage(text, MessageType.USER)
 
         // Add a different placeholder based on streaming state
         val placeholderText = if (isStreamingEnabled) "" else "..."
-        addUiMessage(placeholderText)
+        addUiMessage(placeholderText, MessageType.MODEL)
 
         viewModelScope.launch {
             try {
@@ -218,20 +232,20 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
                 val warmupResult = llamaAndroid.bench(pp, tg, pl, nr)
                 val end = System.nanoTime()
 
-                addUiMessage(warmupResult)
+                addUiMessage(warmupResult, MessageType.MODEL)
 
                 val warmup = (end - start).toDouble() / NanosPerSecond
-                addUiMessage("Warm up time: $warmup seconds, please wait...")
+                addUiMessage("Warm up time: $warmup seconds, please wait...", MessageType.SYSTEM)
 
                 if (warmup > 5.0) {
-                    addUiMessage("Warm up took too long, aborting benchmark")
+                    addUiMessage("Warm up took too long, aborting benchmark", MessageType.SYSTEM)
                     return@launch
                 }
 
-                addUiMessage(llamaAndroid.bench(512, 128, 1, 3))
+                addUiMessage(llamaAndroid.bench(512, 128, 1, 3), MessageType.SYSTEM)
             } catch (exc: IllegalStateException) {
                 Log.e(tag, "bench() failed", exc)
-                addUiMessage(exc.message!!)
+                addUiMessage(exc.message!!, MessageType.SYSTEM)
             }
         }
     }
@@ -240,12 +254,12 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
         viewModelScope.launch {
             try {
                 llamaAndroid.load(pathToModel)
-                addUiMessage("Loaded $pathToModel")
+                addUiMessage("Loaded $pathToModel", MessageType.SYSTEM)
                 _contextSize.value = llamaAndroid.getContextSize()
-                addUiMessage("Model context size: ${contextSize.value} tokens")
+                addUiMessage("Model context size: ${contextSize.value} tokens", MessageType.SYSTEM)
             } catch (exc: IllegalStateException) {
                 Log.e(tag, "load() failed", exc)
-                addUiMessage(exc.message!!)
+                addUiMessage(exc.message!!, MessageType.SYSTEM)
             }
         }
     }
@@ -260,7 +274,7 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
     }
 
     fun log(message: String) {
-        addUiMessage(message)
+        addUiMessage(message, MessageType.SYSTEM)
     }
 
     private suspend fun buildPromptWithHistory(newUserMessage: String): String {
