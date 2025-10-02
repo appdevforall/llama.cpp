@@ -231,42 +231,13 @@ class MainViewModel(
     private suspend fun runAgentLoop(maxTurns: Int = 5) {
         var currentTurn = 0
 
+        // This is a new variable to accumulate the full conversation for the prompt
+        var fullPromptHistory = buildPromptWithHistory(conversation)
+
         while (currentTurn < maxTurns) {
             val isFinalAnswerTurn = currentTurn > 0
-            val prompt: String
 
-            // --- Construct the prompt for the current turn ---
-            if (currentTurn == 0) {
-                prompt = buildPromptWithHistory(conversation)
-                Log.d("AgentLoop", "Turn 1: Sending full prompt.")
-            } else {
-                // On SUBSEQUENT turns, the history is in the KV cache.
-                // We ONLY send the last two messages, formatted correctly, WITHOUT any system headers.
-                val lastModelMsg = conversation[conversation.size - 2]
-                val lastSystemMsg = conversation.last()
-
-                prompt = """
-                <|start_header_id|>assistant<|end_header_id|>
-
-                ${lastModelMsg.text}<|start_header_id|>user<|end_header_id|>
-
-                [TOOL_RESULT]
-                ${lastSystemMsg.text}
-                [/TOOL_RESULT]<|eot_id|>
-            """.trimIndent() + "\n" + // Add the final instruction
-                    """
-                <|start_header_id|>assistant<|end_header_id|>
-
-                Based on the tool results, here is the answer to the user's question:
-            """.trimIndent()
-
-                Log.d("AgentLoop", "Turn ${currentTurn + 1}: Sending incremental prompt.")
-            }
-
-            // <<< LOG 2: The exact prompt being sent to the model >>>
-            Log.d("AgentDebug", "--- [Step ${currentTurn + 1}] ---")
-            Log.d("AgentDebug", "Final Prompt Sent:\n$prompt")
-
+            // --- Get model response ---
             // Stop tokens are crucial for controlling the output.
             val stopStrings = if (isFinalAnswerTurn) {
                 listOf("<|eot_id|>")
@@ -274,36 +245,57 @@ class MainViewModel(
                 listOf("<|eot_id|>", "</tool_call>")
             }
 
-            // --- Get model response ---
+            Log.d("AgentDebug", "--- [Step ${currentTurn + 1}] ---")
+            Log.d("AgentDebug", "Final Prompt Sent:\n$fullPromptHistory")
+
             val modelResponse = try {
+                // We clear the cache before EVERY call now, because we are sending the full history
+                llamaAndroid.clearKvCache()
                 withContext(Dispatchers.IO) {
-                    llamaAndroid.send(prompt, stop = stopStrings).reduce { acc, s -> acc + s }
+                    llamaAndroid.send(fullPromptHistory, stop = stopStrings)
+                        .reduce { acc, s -> acc + s }
                 }
             } catch (e: Exception) {
                 Log.e("AgentLoop", "Model inference failed", e)
                 "Error: Could not get a response from the model."
             }
 
-            // <<< LOG 3: The raw result from the model >>>
             Log.d("AgentDebug", "Raw Model Result: \"$modelResponse\"")
 
             // --- Process and update UI ---
-            val completeModelResponse =
-                modelResponse + if (stopStrings.contains("<|eot_id|>")) "<|eot_id|>" else ""
-            updateLastMessage(completeModelResponse)
+// NEW: Find the end of the tool call and trim the response
+            val toolCallEndIndex = modelResponse.indexOf("</tool_call>")
+            val trimmedModelResponse = if (toolCallEndIndex != -1) {
+                modelResponse.substring(0, toolCallEndIndex + "</tool_call>".length)
+            } else {
+                modelResponse
+            }
+            updateLastMessage(trimmedModelResponse)
 
             // --- Check for tool calls ---
-            val toolCall = parseToolCall(completeModelResponse)
+            val toolCall = parseToolCall(trimmedModelResponse)
             if (toolCall != null) {
                 Log.d("AgentDebug", "Tool Call Detected: $toolCall")
                 val tool = tools[toolCall.toolName]
                 if (tool != null) {
                     val result = tool.execute(getApplication(), toolCall.args)
-
-                    // <<< LOG 4: The result from the executed tool >>>
                     Log.d("AgentDebug", "Tool Response: \"$result\"")
-
                     addMessage(result, MessageType.SYSTEM)
+
+                    // *** THE KEY CHANGE IS HERE ***
+                    // We append the assistant's response and the tool result to our prompt history
+                    // to prepare for the next turn.
+                    fullPromptHistory += "$trimmedModelResponse<|eot_id|>"
+                    fullPromptHistory += """
+        <|start_header_id|>user<|end_header_id|>
+
+        [TOOL_RESULT]
+        $result
+        [/TOOL_RESULT]<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+        Based on the tool results, here is the answer to the user's question:
+        """.trimIndent()
+
                 } else {
                     val errorMsg = "Error: Model tried to call unknown tool '${toolCall.toolName}'"
                     addMessage(errorMsg, MessageType.SYSTEM)
@@ -311,7 +303,6 @@ class MainViewModel(
                     break
                 }
             } else {
-                // <<< LOG 5: The final conclusion >>>
                 Log.d("AgentDebug", "No tool call detected. Concluding.")
                 break
             }
