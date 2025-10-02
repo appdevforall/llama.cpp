@@ -228,12 +228,16 @@ class MainViewModel(
         var currentTurn = 0
 
         while (currentTurn < maxTurns) {
-            val prompt = buildPromptWithHistory()
+            // For the first turn (reasoning), we use the default prompt format.
+            val isFinalAnswerTurn = currentTurn > 0
+            val prompt = buildPromptWithHistory(isFinalAnswerTurn)
+
             Log.d("AgentLoop", "Turn ${currentTurn + 1}, sending prompt.")
 
-            // Always process agent reasoning as a single block
+            // ... (rest of the function is identical to the previous version)
+
             val modelResponse = try {
-                withContext(Dispatchers.IO) { // Ensure heavy model inference is off the main thread
+                withContext(Dispatchers.IO) {
                     llamaAndroid.send(prompt).reduce { acc, s -> acc + s }
                 }
             } catch (e: Exception) {
@@ -241,7 +245,6 @@ class MainViewModel(
                 "Error: Could not get a response from the model."
             }
 
-            // On the first turn, we UPDATE the placeholder. On subsequent turns, we ADD a new message.
             if (currentTurn == 0) {
                 updateLastMessage(modelResponse)
             } else {
@@ -254,15 +257,15 @@ class MainViewModel(
                 val tool = tools[toolCall.toolName]
                 if (tool != null) {
                     val result = tool.execute(getApplication(), toolCall.args)
-                    addMessage(result, MessageType.SYSTEM) // Add tool result to history
+                    addMessage(result, MessageType.SYSTEM)
                 } else {
                     val errorMsg = "Error: Model tried to call unknown tool '${toolCall.toolName}'"
                     addMessage(errorMsg, MessageType.SYSTEM)
-                    break // Exit loop if tool is invalid
+                    break
                 }
             } else {
                 Log.d("AgentLoop", "No tool call detected. Concluding.")
-                break // No tool call found, this is the final answer
+                break
             }
             currentTurn++
         }
@@ -362,17 +365,25 @@ class MainViewModel(
         addMessage(message, MessageType.SYSTEM)
     }
 
-    private fun buildPromptWithHistory(): String {
+    private fun buildPromptWithHistory(isFinalAnswerTurn: Boolean = false): String {
         val historyString = conversation.joinToString(separator = "\n") {
-            // Simple format for the model to understand roles
             when (it.type) {
                 MessageType.USER -> "USER: ${it.text}"
                 MessageType.MODEL -> "ASSISTANT: ${it.text}"
                 MessageType.SYSTEM -> "SYSTEM: ${it.text}"
             }
         }
-        // The final instruction for the assistant
-        return "$masterSystemPrompt\n$historyString\nASSISTANT:"
+
+        // This is the crucial change.
+        val finalInstruction = if (isFinalAnswerTurn) {
+            // If we have already called a tool, give a very specific instruction.
+            "You have been provided with the result of a tool call. Your task is to use this information to construct the final, user-facing answer to the original question. Do not call any more tools."
+        } else {
+            // Otherwise, just prompt the assistant to continue.
+            "" // The "ASSISTANT:" role tag will be added next.
+        }
+
+        return "$masterSystemPrompt\n$historyString\n$finalInstruction\nASSISTANT:"
     }
 
     fun onDownloadableClicked(item: Downloadable, dm: DownloadManager) {
