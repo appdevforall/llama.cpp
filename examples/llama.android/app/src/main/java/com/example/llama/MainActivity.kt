@@ -116,7 +116,7 @@ class MainActivity(
         observeViewModel()
     }
 
-    private fun setupUI() { // No longer need to receive 'models'
+    private fun setupUI() {
         messageAdapter = MessageAdapter(this)
         binding.messagesRecyclerView.apply {
             adapter = messageAdapter

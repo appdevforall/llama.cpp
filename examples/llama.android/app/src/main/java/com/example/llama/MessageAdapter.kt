@@ -15,20 +15,17 @@ private const val VIEW_TYPE_SYSTEM = 0
 private const val VIEW_TYPE_USER = 1
 private const val VIEW_TYPE_MODEL = 2
 
-// The adapter now needs a Context to initialize Markwon
 class MessageAdapter(context: Context) :
     ListAdapter<UiMessage, MessageAdapter.MessageViewHolder>(MessageDiffCallback()) {
 
-    // Create a single Markwon instance to be reused by the ViewHolders
     private val markwon = Markwon.create(context)
 
     sealed class MessageViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-        abstract fun bind(message: UiMessage, markwon: Markwon) // Pass Markwon to the bind method
+        abstract fun bind(message: UiMessage, markwon: Markwon)
 
         class SystemMessageViewHolder(view: View) : MessageViewHolder(view) {
             private val textView: TextView = view.findViewById(R.id.messageTextView)
             override fun bind(message: UiMessage, markwon: Markwon) {
-                // System messages are plain text
                 textView.text = message.text
             }
         }
@@ -36,7 +33,6 @@ class MessageAdapter(context: Context) :
         class UserMessageViewHolder(view: View) : MessageViewHolder(view) {
             private val textView: TextView = view.findViewById(R.id.messageTextView)
             override fun bind(message: UiMessage, markwon: Markwon) {
-                // User messages are plain text
                 textView.text = message.text
             }
         }
@@ -44,11 +40,8 @@ class MessageAdapter(context: Context) :
         class ModelMessageViewHolder(view: View) : MessageViewHolder(view) {
             private val textView: TextView = view.findViewById(R.id.messageTextView)
             override fun bind(message: UiMessage, markwon: Markwon) {
-                // *** THIS IS THE KEY CHANGE ***
-                // Use the Markwon instance to render Markdown into the TextView
                 markwon.setMarkdown(textView, message.text)
 
-                // Make links clickable
                 textView.movementMethod = LinkMovementMethod.getInstance()
             }
         }
@@ -82,7 +75,6 @@ class MessageAdapter(context: Context) :
     }
 
     override fun onBindViewHolder(holder: MessageViewHolder, position: Int) {
-        // Pass the markwon instance when binding
         holder.bind(getItem(position), markwon)
     }
 

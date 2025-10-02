@@ -46,7 +46,6 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
     var conversation = listOf<String>()
         private set
 
-    // Change uiMessages to use LiveData
     private val _uiMessages = MutableLiveData<List<UiMessage>>(
         listOf(
             UiMessage(
@@ -58,11 +57,9 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
     )
     val uiMessages: LiveData<List<UiMessage>> get() = _uiMessages
 
-    // 1. ADD PROPERTY TO HOLD SWITCH STATE (default to true)
     var isStreamingEnabled = true
         private set
 
-    // 2. ADD FUNCTION TO UPDATE THE STATE FROM THE ACTIVITY
     fun setStreaming(isEnabled: Boolean) {
         isStreamingEnabled = isEnabled
     }
@@ -82,7 +79,6 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
 
     private val tag: String? = this::class.simpleName
 
-    // Remove `by mutableStateOf` delegate, use a simple property
     var message: String = ""
 
     private fun addUiMessage(text: String, type: MessageType) {
@@ -175,7 +171,6 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
         conversation += text
         addUiMessage(text, MessageType.USER)
 
-        // Add a different placeholder based on streaming state
         val placeholderText = if (isStreamingEnabled) "" else "..."
         addUiMessage(placeholderText, MessageType.MODEL)
 
@@ -204,16 +199,12 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
                         }
                 } else {
                     try {
-                        // Use flow.reduce to collect all chunks into one final string
                         val fullResponse = llamaAndroid.send(finalPrompt)
                             .reduce { accumulator, value -> accumulator + value }
-                        // Update the UI only once with the full response
                         updateLastUiMessage(fullResponse)
                     } catch (e: NoSuchElementException) {
-                        // This catch is important: reduce throws it if the flow is empty.
                         updateLastUiMessage("Agent returned an empty response.")
                     } catch (e: Exception) {
-                        // Catch any other errors during the flow collection
                         Log.e(tag, "send() [non-streaming] failed", e)
                         updateLastUiMessage(e.message ?: "An unknown error occurred.")
                     }
@@ -298,7 +289,6 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
         return conversationHistory.joinToString(separator = "\n")
     }
 
-    // --- New Download Logic ---
     fun onDownloadableClicked(item: Downloadable, dm: DownloadManager) {
         val currentState = _modelStates.value?.get(item.name)
         when (currentState) {
@@ -325,7 +315,6 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
         log("Saving ${item.name} to ${item.destination.path}")
         val id = dm.enqueue(request)
 
-        // Start monitoring the download
         viewModelScope.launch {
             monitorDownload(item, id, dm)
         }
@@ -377,7 +366,6 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
     }
 
     fun checkInitialSavedModel(context: Context) {
-        // We only need the application context, which is safe
         val prefs = context.getSharedPreferences("LlamaPrefs", Context.MODE_PRIVATE)
         val savedUriString = prefs.getString(SAVED_MODEL_URI_KEY, null)
         if (savedUriString != null) {
