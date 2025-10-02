@@ -53,6 +53,9 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
         isStreamingEnabled = isEnabled
     }
 
+    private val _savedModelUri = MutableLiveData<Uri?>(null)
+    val savedModelUri: LiveData<Uri?> get() = _savedModelUri
+
     private val _modelStates = MutableLiveData<Map<String, DownloadUiState>>(emptyMap())
     val modelStates: LiveData<Map<String, DownloadUiState>> get() = _modelStates
 
@@ -357,5 +360,18 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
         val currentStates = _modelStates.value.orEmpty().toMutableMap()
         currentStates[modelName] = state
         _modelStates.postValue(currentStates)
+    }
+
+    fun checkInitialSavedModel(context: Context) {
+        // We only need the application context, which is safe
+        val prefs = context.getSharedPreferences("LlamaPrefs", Context.MODE_PRIVATE)
+        val savedUriString = prefs.getString(SAVED_MODEL_URI_KEY, null)
+        if (savedUriString != null) {
+            _savedModelUri.value = Uri.parse(savedUriString)
+        }
+    }
+
+    fun onNewModelSelected(uri: Uri?) {
+        _savedModelUri.value = uri
     }
 }

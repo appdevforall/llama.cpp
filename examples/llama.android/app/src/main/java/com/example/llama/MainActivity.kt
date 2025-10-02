@@ -6,10 +6,13 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
 import android.os.StrictMode
+import android.provider.OpenableColumns
 import android.text.format.Formatter
+import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import androidx.activity.result.ActivityResultLauncher
@@ -21,7 +24,8 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.llama.databinding.ActivityMainBinding
 import java.io.File
 
-private const val SAVED_MODEL_URI_KEY = "saved_model_uri"
+const val SAVED_MODEL_URI_KEY = "saved_model_uri"
+private const val PREFS_NAME = "LlamaPrefs"
 
 class MainActivity(
     activityManager: ActivityManager? = null,
@@ -35,7 +39,9 @@ class MainActivity(
 
     private val activityManager by lazy { activityManager ?: getSystemService<ActivityManager>()!! }
     private val downloadManager by lazy { downloadManager ?: getSystemService<DownloadManager>()!! }
-    private val clipboardManager by lazy { clipboardManager ?: getSystemService<ClipboardManager>()!! }
+    private val clipboardManager by lazy {
+        clipboardManager ?: getSystemService<ClipboardManager>()!!
+    }
 
     private val viewModel: MainViewModel by viewModels()
     private lateinit var filePickerLauncher: ActivityResultLauncher<Array<String>>
@@ -54,7 +60,8 @@ class MainActivity(
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        val prefs = getPreferences(Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
         filePickerLauncher = registerForActivityResult(
             ActivityResultContracts.OpenDocument()
         ) { uri ->
@@ -63,7 +70,11 @@ class MainActivity(
                     uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
+                // Save to SharedPreferences
                 prefs.edit().putString(SAVED_MODEL_URI_KEY, uri.toString()).apply()
+                // Notify the ViewModel of the new selection
+                viewModel.onNewModelSelected(uri)
+                // You can optionally load it immediately
                 viewModel.loadModelFromUri(uri, this@MainActivity)
             }
         }
@@ -78,6 +89,8 @@ class MainActivity(
         val total = Formatter.formatFileSize(this, availableMemory().totalMem)
         viewModel.log("Current memory: $free / $total")
         viewModel.log("Downloads directory: ${getExternalFilesDir(null)}")
+
+        viewModel.checkInitialSavedModel(applicationContext)
 
         val extFilesDir = getExternalFilesDir(null)!!
 
@@ -99,7 +112,7 @@ class MainActivity(
             ),
         )
 
-        setupUI() // No longer need to pass 'models'
+        setupUI()
         observeViewModel()
     }
 
@@ -184,6 +197,18 @@ class MainActivity(
                 }
             }
         }
+        viewModel.savedModelUri.observe(this) { uri ->
+            if (uri != null) {
+                // A model is saved
+                binding.loadSavedButton.isEnabled = true
+                binding.savedModelPathTextView.visibility = View.VISIBLE
+                binding.savedModelPathTextView.text = "Saved: ${getFileNameFromUri(uri)}"
+            } else {
+                // No model is saved
+                binding.loadSavedButton.isEnabled = false
+                binding.savedModelPathTextView.visibility = View.GONE
+            }
+        }
     }
 
     private fun send() {
@@ -194,21 +219,50 @@ class MainActivity(
     }
 
     private fun loadFromSaved() {
-        val prefs = getPreferences(Context.MODE_PRIVATE)
-        val savedUriString = prefs.getString(SAVED_MODEL_URI_KEY, null)
-        if (savedUriString != null) {
-            val uri = Uri.parse(savedUriString)
+        // Now, this function can rely on the ViewModel's state
+        val savedUri = viewModel.savedModelUri.value
+        if (savedUri != null) {
             val hasPermission = contentResolver.persistedUriPermissions.any {
-                it.uri == uri && it.isReadPermission
+                it.uri == savedUri && it.isReadPermission
             }
             if (hasPermission) {
-                viewModel.loadModelFromUri(uri, this)
+                viewModel.loadModelFromUri(savedUri, this)
             } else {
                 viewModel.log("Permission for saved model lost. Please select it again.")
-                prefs.edit().remove(SAVED_MODEL_URI_KEY).apply()
+                // Clear the invalid preference and update the ViewModel
+                getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                    .remove(SAVED_MODEL_URI_KEY).apply()
+                viewModel.onNewModelSelected(null) // This will disable the button
             }
         } else {
-            viewModel.log("No saved model found. Use 'Load from file' first.")
+            // This case should ideally not happen since the button would be disabled,
+            // but it's good practice to handle it.
+            viewModel.log("No saved model found.")
         }
+    }
+
+    private fun getFileNameFromUri(uri: Uri): String {
+        var result: String? = null
+        if (uri.scheme == "content") {
+            val cursor: Cursor? = contentResolver.query(uri, null, null, null, null)
+            try {
+                if (cursor != null && cursor.moveToFirst()) {
+                    val colIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (colIndex >= 0) {
+                        result = cursor.getString(colIndex)
+                    }
+                }
+            } finally {
+                cursor?.close()
+            }
+        }
+        if (result == null) {
+            result = uri.path
+            val cut = result?.lastIndexOf('/')
+            if (cut != null && cut != -1) {
+                result = result?.substring(cut + 1)
+            }
+        }
+        return result ?: "Unknown File"
     }
 }
