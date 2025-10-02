@@ -379,24 +379,37 @@ class MainViewModel(
     }
 
     private fun buildPromptWithHistory(isFinalAnswerTurn: Boolean = false): String {
-        val historyString = conversation.joinToString(separator = "\n") {
-            when (it.type) {
-                MessageType.USER -> "USER: ${it.text}"
-                MessageType.MODEL -> "ASSISTANT: ${it.text}"
-                MessageType.SYSTEM -> "SYSTEM: ${it.text}"
+        val historyBuilder = StringBuilder()
+
+        // Start with the system prompt
+        historyBuilder.append("<|start_header_id|>system<|end_header_id|>\n\n$masterSystemPrompt<|eot_id|>")
+
+        // Append the conversation history
+        for (message in conversation) {
+            when (message.type) {
+                MessageType.USER -> {
+                    historyBuilder.append("<|start_header_id|>user<|end_header_id|>\n\n${message.text}<|eot_id|>")
+                }
+
+                MessageType.MODEL -> {
+                    historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n${message.text}<|eot_id|>")
+                }
+
+                MessageType.SYSTEM -> {
+                    // For tool results, we frame it as if the user is providing the info back to the assistant
+                    historyBuilder.append("<|start_header_id|>user<|end_header_id|>\n\n[TOOL_RESULT]\n${message.text}\n[/TOOL_RESULT]<|eot_id|>")
+                }
             }
         }
 
-        // This is the crucial change.
-        val finalInstruction = if (isFinalAnswerTurn) {
-            // If we have already called a tool, give a very specific instruction.
-            "You have been provided with the result of a tool call. Your task is to use this information to construct the final, user-facing answer to the original question. Do not call any more tools."
+        // This is the crucial change for the final turn
+        if (isFinalAnswerTurn) {
+            historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\nBased on the tool results, here is the answer to the user's question:\n")
         } else {
-            // Otherwise, just prompt the assistant to continue.
-            "" // The "ASSISTANT:" role tag will be added next.
+            historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n")
         }
 
-        return "$masterSystemPrompt\n$historyString\n$finalInstruction\nASSISTANT:"
+        return historyBuilder.toString()
     }
 
     fun onDownloadableClicked(item: Downloadable, dm: DownloadManager) {
