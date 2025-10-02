@@ -91,7 +91,8 @@ class LLamaAndroid {
         batch: Long,
         text: String,
         formatChat: Boolean,
-        nLen: Int
+        nLen: Int,
+        stop: Array<String>
     ): Int
 
     private external fun completion_loop(
@@ -143,10 +144,24 @@ class LLamaAndroid {
         }
     }
 
-    fun send(message: String, formatChat: Boolean = false): Flow<String> = flow {
+    fun send(
+        message: String,
+        formatChat: Boolean = false,
+        stop: List<String> = emptyList()
+    ): Flow<String> = flow {
         when (val state = threadLocalState.get()) {
             is State.Loaded -> {
-                val ncur = IntVar(completion_init(state.context, state.batch, message, formatChat, nlen))
+                val ncur = IntVar(
+                    completion_init(
+                        state.context,
+                        state.batch,
+                        message,
+                        formatChat,
+                        nlen,
+                        stop.toTypedArray()
+                    )
+                )
+
                 while (ncur.value <= nlen) {
                     val str = completion_loop(state.context, state.batch, state.sampler, nlen, ncur)
                     if (str == null) {

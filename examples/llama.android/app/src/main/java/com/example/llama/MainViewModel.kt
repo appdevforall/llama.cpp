@@ -228,30 +228,43 @@ class MainViewModel(
         var currentTurn = 0
 
         while (currentTurn < maxTurns) {
-            // For the first turn (reasoning), we use the default prompt format.
             val isFinalAnswerTurn = currentTurn > 0
             val prompt = buildPromptWithHistory(isFinalAnswerTurn)
 
             Log.d("AgentLoop", "Turn ${currentTurn + 1}, sending prompt.")
 
-            // ... (rest of the function is identical to the previous version)
+            // For the reasoning step where the model might call a tool,
+            // we want it to stop as soon as it's done writing the tool call.
+            val stopStrings = if (isFinalAnswerTurn) emptyList() else listOf("</tool_call>")
 
             val modelResponse = try {
                 withContext(Dispatchers.IO) {
-                    llamaAndroid.send(prompt).reduce { acc, s -> acc + s }
+                    // *** THIS IS THE KEY CHANGE ***
+                    // Pass the stop parameter to the send function.
+                    llamaAndroid.send(prompt, stop = stopStrings).reduce { acc, s -> acc + s }
                 }
             } catch (e: Exception) {
                 Log.e("AgentLoop", "Model inference failed", e)
                 "Error: Could not get a response from the model."
             }
 
+            // IMPORTANT: The model's output might not include the stop string itself.
+            // We need to re-append it for our parser to work correctly.
+            val completeModelResponse =
+                if (!isFinalAnswerTurn && !modelResponse.contains("</tool_call>")) {
+                    modelResponse + "</tool_call>"
+                } else {
+                    modelResponse
+                }
+
+
             if (currentTurn == 0) {
-                updateLastMessage(modelResponse)
+                updateLastMessage(completeModelResponse)
             } else {
-                addMessage(modelResponse, MessageType.MODEL)
+                addMessage(completeModelResponse, MessageType.MODEL)
             }
 
-            val toolCall = parseToolCall(modelResponse)
+            val toolCall = parseToolCall(completeModelResponse)
             if (toolCall != null) {
                 Log.d("AgentLoop", "Tool call detected: $toolCall")
                 val tool = tools[toolCall.toolName]
