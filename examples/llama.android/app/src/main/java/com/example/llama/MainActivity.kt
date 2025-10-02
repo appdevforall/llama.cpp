@@ -43,10 +43,11 @@ class MainActivity(
         clipboardManager ?: getSystemService<ClipboardManager>()!!
     }
 
-    private val viewModel: MainViewModel by viewModels()
+    private val viewModel: MainViewModel by viewModels {
+        MainViewModelFactory(application)
+    }
     private lateinit var filePickerLauncher: ActivityResultLauncher<Array<String>>
 
-    // CHANGE 1: Declare 'models' as a class property
     private lateinit var models: List<Downloadable>
 
     private fun availableMemory(): ActivityManager.MemoryInfo {

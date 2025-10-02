@@ -1,5 +1,6 @@
 package com.example.llama
 
+import android.app.Application
 import android.app.DownloadManager
 import android.content.Context
 import android.database.Cursor
@@ -9,9 +10,11 @@ import android.provider.OpenableColumns
 import android.util.Log
 import androidx.core.database.getLongOrNull
 import androidx.core.net.toUri
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
@@ -21,6 +24,17 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicLong
 
+class MainViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
+            // This is where we manually call our ViewModel's constructor
+            // with all the required parameters.
+            @Suppress("UNCHECKED_CAST")
+            return MainViewModel(application, LLamaAndroid.instance()) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class")
+    }
+}
 enum class MessageType {
     SYSTEM, USER, MODEL
 }
@@ -33,15 +47,21 @@ data class UiMessage(
 
 sealed interface DownloadUiState {
     data object Ready : DownloadUiState
-    data class Downloading(val progress: Int) : DownloadUiState // Progress as Int 0-100
+    data class Downloading(val progress: Int) : DownloadUiState
     data object Downloaded : DownloadUiState
     data class Error(val message: String) : DownloadUiState
 }
 
-class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instance()) : ViewModel() {
+class MainViewModel(
+    application: Application,
+    private val llamaAndroid: LLamaAndroid = LLamaAndroid.instance()
+) : AndroidViewModel(application) {
     private val messageIdCounter = AtomicLong(0)
     private val _contextSize = MutableLiveData(0)
     val contextSize: LiveData<Int> get() = _contextSize
+    private val tools: List<Tool> = listOf(
+        BatteryTool()
+    )
 
     var conversation = listOf<String>()
         private set
@@ -185,7 +205,13 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
                     return@launch
                 }
 
-                val finalPrompt = buildPromptWithHistory(text)
+                // CHANGE 3: Execute tools and get the context BEFORE building the prompt
+                val toolContext = executeTools()
+
+                // Pass this new context to the prompt builder
+                val finalPrompt = buildPromptWithHistory(text, toolContext)
+
+                Log.i(tag, "Final prompt with tool context:\n$finalPrompt")
 
                 if (isStreamingEnabled) {
                     llamaAndroid.send(finalPrompt)
@@ -268,14 +294,16 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
         addUiMessage(message, MessageType.SYSTEM)
     }
 
-    private suspend fun buildPromptWithHistory(newUserMessage: String): String {
+    private suspend fun buildPromptWithHistory(
+        newUserMessage: String,
+        systemContext: String
+    ): String {
         val promptTokenBudget = ((contextSize.value ?: 0) * (1.0 - CONTEXT_RESERVATION_PERCENT)).toInt()
         val conversationHistory = mutableListOf<String>()
         var totalTokens = 0
         val newUserMessageTokens = llamaAndroid.tokenize(newUserMessage)
         totalTokens += newUserMessageTokens.size
         conversationHistory.add(newUserMessage)
-        val history = conversation.dropLast(if (conversation.last().isBlank()) 2 else 0)
         for (message in conversation.reversed()) {
             if (message.isBlank()) continue
             val messageTokens = llamaAndroid.tokenize(message)
@@ -286,7 +314,9 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
             conversationHistory.add(0, message)
         }
         Log.i(tag, "Prompt built with $totalTokens tokens, using ${conversationHistory.size} messages.")
-        return conversationHistory.joinToString(separator = "\n")
+
+        val historyString = conversationHistory.joinToString(separator = "\n")
+        return "$systemContext\n$historyString"
     }
 
     fun onDownloadableClicked(item: Downloadable, dm: DownloadManager) {
@@ -375,5 +405,13 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
 
     fun onNewModelSelected(uri: Uri?) {
         _savedModelUri.value = uri
+    }
+
+    // Helper function to execute tools and gather context
+    private fun executeTools(): String {
+        val context = getApplication<Application>().applicationContext
+        // In the future, you could have logic to decide which tools to run.
+        // For now, we run all of them as per the request.
+        return tools.joinToString("\n") { tool -> tool.execute(context) }
     }
 }
