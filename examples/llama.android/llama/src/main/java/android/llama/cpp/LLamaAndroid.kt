@@ -27,7 +27,15 @@ class LLamaAndroid {
         }
     }
 
-    // ADD THIS public function to tokenize text
+    suspend fun clearKvCache() {
+        withContext(runLoop) {
+            when (val state = threadLocalState.get()) {
+                is State.Loaded -> kv_cache_clear(state.context)
+                else -> {}
+            }
+        }
+    }
+
     suspend fun tokenize(text: String): IntArray {
         return withContext(runLoop) {
             when (val state = threadLocalState.get()) {
@@ -147,10 +155,16 @@ class LLamaAndroid {
     fun send(
         message: String,
         formatChat: Boolean = false,
-        stop: List<String> = emptyList()
+        stop: List<String> = emptyList(),
+        clearCache: Boolean = false
     ): Flow<String> = flow {
         when (val state = threadLocalState.get()) {
             is State.Loaded -> {
+                // If requested, clear the cache BEFORE starting this turn
+                if (clearCache) {
+                    kv_cache_clear(state.context)
+                }
+
                 val ncur = IntVar(
                     completion_init(
                         state.context,
@@ -169,7 +183,6 @@ class LLamaAndroid {
                     }
                     emit(str)
                 }
-                kv_cache_clear(state.context)
             }
             else -> {}
         }

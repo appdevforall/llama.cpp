@@ -220,6 +220,7 @@ class MainViewModel(
         addMessage(placeholder, MessageType.MODEL)
 
         viewModelScope.launch {
+            llamaAndroid.clearKvCache()
             runAgentLoop()
         }
     }
@@ -228,19 +229,46 @@ class MainViewModel(
         var currentTurn = 0
 
         while (currentTurn < maxTurns) {
+            val prompt: String
             val isFinalAnswerTurn = currentTurn > 0
-            val prompt = buildPromptWithHistory(isFinalAnswerTurn)
 
-            Log.d("AgentLoop", "Turn ${currentTurn + 1}, sending prompt.")
+            if (currentTurn == 0) {
+                // On the FIRST turn, build the full prompt with the complete history.
+                prompt = buildPromptWithHistory(conversation)
+                Log.d("AgentLoop", "Turn 1: Sending full prompt.")
+            } else {
+                // On SUBSEQUENT turns, the history is in the KV cache.
+                // We ONLY send the last two messages, formatted correctly, WITHOUT any system headers.
+                val lastModelMsg = conversation[conversation.size - 2]
+                val lastSystemMsg = conversation.last()
 
-            // For the reasoning step where the model might call a tool,
-            // we want it to stop as soon as it's done writing the tool call.
-            val stopStrings = if (isFinalAnswerTurn) emptyList() else listOf("</tool_call>")
+                prompt = """
+                <|start_header_id|>assistant<|end_header_id|>
+
+                ${lastModelMsg.text}<|start_header_id|>user<|end_header_id|>
+
+                [TOOL_RESULT]
+                ${lastSystemMsg.text}
+                [/TOOL_RESULT]<|eot_id|>
+            """.trimIndent() + "\n" + // Add the final instruction
+                    """
+                <|start_header_id|>assistant<|end_header_id|>
+
+                Based on the tool results, here is the answer to the user's question:
+            """.trimIndent()
+
+                Log.d("AgentLoop", "Turn ${currentTurn + 1}: Sending incremental prompt.")
+            }
+
+            // Stop tokens are crucial for controlling the output.
+            val stopStrings = if (isFinalAnswerTurn) {
+                listOf("<|eot_id|>")
+            } else {
+                listOf("<|eot_id|>", "</tool_call>")
+            }
 
             val modelResponse = try {
                 withContext(Dispatchers.IO) {
-                    // *** THIS IS THE KEY CHANGE ***
-                    // Pass the stop parameter to the send function.
                     llamaAndroid.send(prompt, stop = stopStrings).reduce { acc, s -> acc + s }
                 }
             } catch (e: Exception) {
@@ -248,23 +276,15 @@ class MainViewModel(
                 "Error: Could not get a response from the model."
             }
 
-            // IMPORTANT: The model's output might not include the stop string itself.
-            // We need to re-append it for our parser to work correctly.
-            val completeModelResponse =
-                if (!isFinalAnswerTurn && !modelResponse.contains("</tool_call>")) {
-                    modelResponse + "</tool_call>"
-                } else {
-                    modelResponse
-                }
-
-
+            // Add the model's response to the conversation history.
             if (currentTurn == 0) {
-                updateLastMessage(completeModelResponse)
+                updateLastMessage(modelResponse) // Update the placeholder
             } else {
-                addMessage(completeModelResponse, MessageType.MODEL)
+                updateLastMessage(modelResponse) // Replace the tool call with the final answer
             }
 
-            val toolCall = parseToolCall(completeModelResponse)
+            // Check if the model's response was another tool call.
+            val toolCall = parseToolCall(modelResponse)
             if (toolCall != null) {
                 Log.d("AgentLoop", "Tool call detected: $toolCall")
                 val tool = tools[toolCall.toolName]
@@ -274,11 +294,11 @@ class MainViewModel(
                 } else {
                     val errorMsg = "Error: Model tried to call unknown tool '${toolCall.toolName}'"
                     addMessage(errorMsg, MessageType.SYSTEM)
-                    break
+                    break // Exit loop on error
                 }
             } else {
                 Log.d("AgentLoop", "No tool call detected. Concluding.")
-                break
+                break // This is the final answer, exit the loop.
             }
             currentTurn++
         }
@@ -378,36 +398,31 @@ class MainViewModel(
         addMessage(message, MessageType.SYSTEM)
     }
 
-    private fun buildPromptWithHistory(isFinalAnswerTurn: Boolean = false): String {
+    private fun buildPromptWithHistory(history: List<UiMessage>): String {
         val historyBuilder = StringBuilder()
 
-        // Start with the system prompt
+        // Add the special begin_of_text token ONLY at the start.
+        historyBuilder.append("<|begin_of_text|>")
         historyBuilder.append("<|start_header_id|>system<|end_header_id|>\n\n$masterSystemPrompt<|eot_id|>")
 
-        // Append the conversation history
-        for (message in conversation) {
+        for (message in history) {
             when (message.type) {
                 MessageType.USER -> {
                     historyBuilder.append("<|start_header_id|>user<|end_header_id|>\n\n${message.text}<|eot_id|>")
                 }
-
+                // The placeholder is the last message, so we don't append it to the prompt.
                 MessageType.MODEL -> {
-                    historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n${message.text}<|eot_id|>")
+                    if (message.text.isNotBlank()) {
+                        historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n${message.text}")
+                    }
                 }
-
-                MessageType.SYSTEM -> {
-                    // For tool results, we frame it as if the user is providing the info back to the assistant
-                    historyBuilder.append("<|start_header_id|>user<|end_header_id|>\n\n[TOOL_RESULT]\n${message.text}\n[/TOOL_RESULT]<|eot_id|>")
-                }
+                // There are no SYSTEM messages in the initial turn.
+                MessageType.SYSTEM -> {}
             }
         }
 
-        // This is the crucial change for the final turn
-        if (isFinalAnswerTurn) {
-            historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\nBased on the tool results, here is the answer to the user's question:\n")
-        } else {
-            historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n")
-        }
+        // Prompt the assistant to start its turn.
+        historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n")
 
         return historyBuilder.toString()
     }
