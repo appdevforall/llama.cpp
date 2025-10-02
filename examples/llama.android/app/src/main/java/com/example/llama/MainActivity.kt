@@ -117,7 +117,7 @@ class MainActivity(
     }
 
     private fun setupUI() { // No longer need to receive 'models'
-        messageAdapter = MessageAdapter()
+        messageAdapter = MessageAdapter(this)
         binding.messagesRecyclerView.apply {
             adapter = messageAdapter
             layoutManager = LinearLayoutManager(this@MainActivity)

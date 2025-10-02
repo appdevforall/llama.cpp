@@ -1,5 +1,7 @@
 package com.example.llama
 
+import android.content.Context
+import android.text.method.LinkMovementMethod
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -7,37 +9,47 @@ import android.widget.TextView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import io.noties.markwon.Markwon
 
-// Define constants for our view types
 private const val VIEW_TYPE_SYSTEM = 0
 private const val VIEW_TYPE_USER = 1
 private const val VIEW_TYPE_MODEL = 2
 
-class MessageAdapter :
+// The adapter now needs a Context to initialize Markwon
+class MessageAdapter(context: Context) :
     ListAdapter<UiMessage, MessageAdapter.MessageViewHolder>(MessageDiffCallback()) {
 
-    // A sealed class for our ViewHolders makes the 'when' statement in onBindViewHolder exhaustive
+    // Create a single Markwon instance to be reused by the ViewHolders
+    private val markwon = Markwon.create(context)
+
     sealed class MessageViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-        abstract fun bind(message: UiMessage)
+        abstract fun bind(message: UiMessage, markwon: Markwon) // Pass Markwon to the bind method
 
         class SystemMessageViewHolder(view: View) : MessageViewHolder(view) {
             private val textView: TextView = view.findViewById(R.id.messageTextView)
-            override fun bind(message: UiMessage) {
+            override fun bind(message: UiMessage, markwon: Markwon) {
+                // System messages are plain text
                 textView.text = message.text
             }
         }
 
         class UserMessageViewHolder(view: View) : MessageViewHolder(view) {
             private val textView: TextView = view.findViewById(R.id.messageTextView)
-            override fun bind(message: UiMessage) {
+            override fun bind(message: UiMessage, markwon: Markwon) {
+                // User messages are plain text
                 textView.text = message.text
             }
         }
 
         class ModelMessageViewHolder(view: View) : MessageViewHolder(view) {
             private val textView: TextView = view.findViewById(R.id.messageTextView)
-            override fun bind(message: UiMessage) {
-                textView.text = message.text
+            override fun bind(message: UiMessage, markwon: Markwon) {
+                // *** THIS IS THE KEY CHANGE ***
+                // Use the Markwon instance to render Markdown into the TextView
+                markwon.setMarkdown(textView, message.text)
+
+                // Make links clickable
+                textView.movementMethod = LinkMovementMethod.getInstance()
             }
         }
     }
@@ -57,23 +69,21 @@ class MessageAdapter :
                 val view = inflater.inflate(R.layout.item_message_system, parent, false)
                 MessageViewHolder.SystemMessageViewHolder(view)
             }
-
             VIEW_TYPE_USER -> {
                 val view = inflater.inflate(R.layout.item_message_user, parent, false)
                 MessageViewHolder.UserMessageViewHolder(view)
             }
-
             VIEW_TYPE_MODEL -> {
                 val view = inflater.inflate(R.layout.item_message_model, parent, false)
                 MessageViewHolder.ModelMessageViewHolder(view)
             }
-
             else -> throw IllegalArgumentException("Unknown viewType: $viewType")
         }
     }
 
     override fun onBindViewHolder(holder: MessageViewHolder, position: Int) {
-        holder.bind(getItem(position))
+        // Pass the markwon instance when binding
+        holder.bind(getItem(position), markwon)
     }
 
     class MessageDiffCallback : DiffUtil.ItemCallback<UiMessage>() {
@@ -82,7 +92,6 @@ class MessageAdapter :
         }
 
         override fun areContentsTheSame(oldItem: UiMessage, newItem: UiMessage): Boolean {
-            // Check both text and type for content changes
             return oldItem.text == newItem.text && oldItem.type == newItem.type
         }
     }
