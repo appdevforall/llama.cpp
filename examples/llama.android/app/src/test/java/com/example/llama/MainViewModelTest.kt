@@ -44,11 +44,8 @@ class MainViewModelTest {
         )
     }
 
-    // ... (initial state and clear tests are fine)
-
     @Test
     fun `send adds user message and placeholder model message`() {
-        // This test will now pass because of the state management fix in MainViewModel
         val userMessage = "Hello, world!"
         viewModel.updateMessage(userMessage)
 
@@ -66,22 +63,28 @@ class MainViewModelTest {
     fun `send calls llamaAndroid send method`() = runTest {
         val userMessage = "What is the time?"
         viewModel.updateMessage(userMessage)
-        // Note: The default path calls runAgentLoop which uses a send with two args.
-        // The mock should match what is actually called.
+
+        // FIX: Provide a matcher for ALL FOUR arguments of the send method.
         whenever(
             mockLlamaAndroid.send(
-                any<String>(),
-                stop = any<List<String>>()
+                any<String>(),       // message
+                any<Boolean>(),      // formatChat
+                any<List<String>>(), // stop
+                any<Boolean>()       // clearCache
             )
         ) doReturn flowOf("Response")
 
         viewModel.send()
 
-        // FIX: Advance the dispatcher to execute the coroutine in customScope
         mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle()
 
-        // Verify the method called by runAgentLoop
-        verify(mockLlamaAndroid).send(any<String>(), stop = any<List<String>>())
+        // FIX: The verify call must also match the full signature with 4 matchers.
+        verify(mockLlamaAndroid).send(
+            any<String>(),
+            any<Boolean>(),
+            any<List<String>>(),
+            any<Boolean>()
+        )
     }
 
     @Test
@@ -92,7 +95,6 @@ class MainViewModelTest {
 
         viewModel.load(modelPath)
 
-        // FIX: Advance the dispatcher to execute the coroutine in customScope
         mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle()
 
         verify(mockLlamaAndroid).load(modelPath)
@@ -105,12 +107,11 @@ class MainViewModelTest {
     fun `load failure updates log with error message`() = runTest {
         val modelPath = "/fake/path/to/model.gguf"
         val errorMessage = "Failed to load model"
-        // This is a throwing call, so we use doThrow() or throws()
+
         whenever(mockLlamaAndroid.load(modelPath)).thenThrow(IllegalStateException(errorMessage))
 
         viewModel.load(modelPath)
 
-        // FIX: Advance the dispatcher to execute the coroutine in customScope
         mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle()
 
         val messages = viewModel.uiMessages.value!!
