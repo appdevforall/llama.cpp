@@ -76,7 +76,7 @@ class ChatRepository(
         if (isToolUseEnabled) {
             runAgentLoop()
         } else {
-            val fullPrompt = buildPromptWithHistory(_messages.value)
+            val fullPrompt = buildPromptWithHistory(_messages.value, false)
             runSimpleInference(fullPrompt, isStreaming)
         }
     }
@@ -203,7 +203,7 @@ class ChatRepository(
 
             val stopStrings = listOf("\n")
 
-            val fullPromptHistory = buildPromptWithHistory(currentHistory)
+            val fullPromptHistory = buildPromptWithHistory(currentHistory, isFinalAnswerTurn)
             Log.d("AgentDebug", "Final Prompt Sent:\n$fullPromptHistory")
             val startTime = System.nanoTime()
             val modelResponse = try {
@@ -319,10 +319,19 @@ class ChatRepository(
         }
     }
 
-    private fun buildPromptWithHistory(history: List<UiMessage>): String {
+    private fun buildPromptWithHistory(
+        history: List<UiMessage>,
+        isFinalAnswerTurn: Boolean
+    ): String {
         return when (currentModelFamily) {
             ModelFamily.LLAMA3 -> buildLlama3Prompt(history)
-            ModelFamily.GEMMA2 -> buildGemma2Prompt(history)
+            ModelFamily.GEMMA2 -> {
+                if (isFinalAnswerTurn) {
+                    buildGemma2FinalAnswerPrompt(history)
+                } else {
+                    buildGemma2Prompt(history)
+                }
+            }
             else -> history.lastOrNull { it.type == MessageType.USER }?.text ?: ""
         }
     }
@@ -374,6 +383,37 @@ model:
             }
         }
         promptBuilder.append("model:\n") // Ready for the model's response
+        return promptBuilder.toString()
+    }
+
+    // 2. Create the NEW function for the final answer
+    private fun buildGemma2FinalAnswerPrompt(history: List<UiMessage>): String {
+        val promptBuilder = StringBuilder()
+        val systemInstruction = """
+You are a helpful assistant.
+You have been given the result from a tool.
+Use the tool's result to answer the user's original question in a natural, conversational way.
+    """.trimIndent()
+
+        promptBuilder.append(systemInstruction)
+        promptBuilder.append("\n\n**CONVERSATION:**\n")
+
+        // In this prompt, we MUST include the TOOL_RESULT
+        history.forEach { message ->
+            when (message.type) {
+                MessageType.USER -> promptBuilder.append("user: ${message.text}\n")
+                MessageType.MODEL -> {
+                    // For the model's turn, we show the tool it decided to call
+                    if (message.text.isNotBlank() && message.text.startsWith("Tool Call:")) {
+                        promptBuilder.append("model: ${message.text}\n")
+                    }
+                }
+                // THIS IS THE CRITICAL CHANGE
+                MessageType.TOOL_RESULT -> promptBuilder.append("tool_result: ${message.text}\n")
+                MessageType.SYSTEM -> {}
+            }
+        }
+        promptBuilder.append("model:\n") // Ready for the model's final answer
         return promptBuilder.toString()
     }
 
