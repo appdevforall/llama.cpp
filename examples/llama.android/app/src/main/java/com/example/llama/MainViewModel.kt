@@ -275,16 +275,21 @@ class MainViewModel(
         var currentTurn = 0
 
         while (currentTurn < maxTurns) {
-            val fullPromptHistory = buildPromptWithHistory(conversation)
+            Log.d("AgentDebug", "--- [Step ${currentTurn + 1}] ---")
 
-            val isFinalAnswerTurn = conversation.lastOrNull()?.type == MessageType.TOOL_RESULT
+            // Determine if this turn is for generating the final answer
+            val isFinalAnswerTurn =
+                conversation.getOrNull(conversation.size - 2)?.type == MessageType.TOOL_RESULT
+
             val stopStrings = if (isFinalAnswerTurn) {
-                listOf("<end_of_turn>") // Allow a natural response
+                // After a tool result, we expect a final answer, ending with <end_of_turn>
+                listOf("<end_of_turn>")
             } else {
-                listOf("</tool_call>") // Expect a tool call
+                // Initially, we expect a tool call, ending with </tool_call>
+                listOf("</tool_call>")
             }
 
-            Log.d("AgentDebug", "--- [Step ${currentTurn + 1}] ---")
+            val fullPromptHistory = buildPromptWithHistory(conversation)
             Log.d("AgentDebug", "Final Prompt Sent:\n$fullPromptHistory")
 
             val modelResponse = try {
@@ -297,52 +302,58 @@ class MainViewModel(
                 Log.e("AgentLoop", "Model inference failed", e)
                 "Error: Could not get a response from the model."
             }
+
+            // Clean the response by taking everything before the first stop string.
             val finalResponse = modelResponse.split(stopStrings.first()).first()
-
             Log.d("AgentDebug", "Raw Model Result: \"$modelResponse\"")
-            Log.d("AgentDebug", "Trimmed Final Result: \"$finalResponse\"") // New log for debugging
+            Log.d("AgentDebug", "Trimmed Final Result: \"$finalResponse\"")
 
-            val toolCall = parseToolCall(finalResponse)
+            // *** LOGIC CHANGE IS HERE ***
+            if (isFinalAnswerTurn) {
+                // --- THIS IS THE FINAL ANSWER ---
+                // We are in the "Final Answer State". Do NOT look for another tool call.
+                // The model's response is the answer for the user.
+                updateLastMessage(finalResponse)
+                Log.d("AgentDebug", "Final answer received. Concluding.")
+                break // Exit the loop successfully.
 
-            if (toolCall != null) {
-                // --- A TOOL CALL WAS FOUND ---
-
-                // 1. Trim the response to only include the tool call
-                val toolCallEndIndex = modelResponse.indexOf("</tool_call>")
-                val trimmedResponse =
-                    modelResponse.substring(0, toolCallEndIndex + "</tool_call>".length)
-
-                // 2. Update the first model placeholder with the tool call text
-                updateLastMessage(trimmedResponse)
-                Log.d("AgentDebug", "Tool Call Detected: $toolCall")
-
-                val tool = tools[toolCall.toolName]
-                if (tool != null) {
-                    val result = tool.execute(getApplication(), toolCall.args)
-                    Log.d("AgentDebug", "Tool Response: \"$result\"")
-
-                    // 3. Add the SYSTEM message with the tool result
-                    addMessage(result, MessageType.TOOL_RESULT)
-
-                    // 4. IMPORTANT: Add a NEW placeholder for the final answer
-                    addMessage("", MessageType.MODEL)
-
-                } else {
-                    val errorMsg = "Error: Model tried to call unknown tool '${toolCall.toolName}'"
-                    updateLastMessage(errorMsg) // Update placeholder with error
-                    Log.e("AgentDebug", errorMsg)
-                    break // Exit loop on error
-                }
             } else {
-                // --- NO TOOL CALL FOUND: THIS IS THE FINAL ANSWER ---
+                // --- A TOOL CALL IS EXPECTED ---
+                // We are in the "Tool Selection State".
+                val toolCall = parseToolCall(finalResponse)
 
-                // 1. Update the LAST message (which is our new empty placeholder)
-                //    with the final model response.
-                updateLastMessage(modelResponse)
-                Log.d("AgentDebug", "No tool call detected. Concluding.")
+                if (toolCall != null) {
+                    // A tool call was found, as expected.
+                    val toolCallString = "<tool_call>\n" +
+                        "{\n" +
+                        "  \"tool_name\": \"${toolCall.toolName}\",\n" +
+                        "  \"args\": {}\n" + // Assuming simple args for now
+                        "}\n" +
+                        "</tool_call>"
 
-                // 2. Exit the loop
-                break
+                    updateLastMessage(toolCallString) // Show the tool call in the UI
+                    Log.d("AgentDebug", "Tool Call Detected: $toolCall")
+
+                    val tool = tools[toolCall.toolName]
+                    if (tool != null) {
+                        val result = tool.execute(getApplication(), toolCall.args)
+                        Log.d("AgentDebug", "Tool Response: \"$result\"")
+                        addMessage(result, MessageType.TOOL_RESULT)
+                        addMessage("", MessageType.MODEL) // Add placeholder for the final answer
+                    } else {
+                        val errorMsg =
+                            "Error: Model tried to call unknown tool '${toolCall.toolName}'"
+                        updateLastMessage(errorMsg)
+                        Log.e("AgentDebug", errorMsg)
+                        break // Exit loop on error
+                    }
+                } else {
+                    // --- NO TOOL CALL FOUND (Direct Answer) ---
+                    // The model decided to answer directly without using a tool.
+                    updateLastMessage(finalResponse)
+                    Log.d("AgentDebug", "No tool call detected. Model gave a direct answer.")
+                    break // Exit the loop
+                }
             }
             currentTurn++
         }
@@ -504,16 +515,13 @@ class MainViewModel(
         val promptBuilder = StringBuilder()
 
         // --- 1. System Preamble: Define the role, rules, and tools ---
-        // Use a structured JSON format for tool definitions, as it's less ambiguous for the model.
         val toolsAsJsonArray =
             tools.values.joinToString(prefix = "[", postfix = "]", separator = ",\n") { tool ->
                 """  {
-        |    "tool_name": "${tool.name}",
-        |    "description": "${tool.description.replace("\"", "\\\"")}",
-        |    "args": {}
-        |  }""".trimMargin()
-                // Note: `argumentsAsJsonSchema` is a placeholder for a function that returns
-                // a JSON string like "{ \"city\": \"The name of the city.\" }"
+    |    "tool_name": "${tool.name}",
+    |    "description": "${tool.description.replace("\"", "\\\"")}",
+    |    "args": {}
+    |  }""".trimMargin()
             }
 
         promptBuilder.append("You are a helpful assistant. To answer the user's question, you can either respond directly or use one of the following tools.\n\n")
@@ -521,41 +529,41 @@ class MainViewModel(
         promptBuilder.append(toolsAsJsonArray)
         promptBuilder.append("\n\n")
         promptBuilder.append("### RESPONSE FORMAT\n")
-        promptBuilder.append("To use a tool, you must respond ONLY with a single <tool_call> XML tag containing a valid JSON object. Do not add any other text, reasoning, or markdown formatting.\n")
-        promptBuilder.append("Example:\n")
-        promptBuilder.append("<tool_call>\n{\n  \"tool_name\": \"get_current_datetime\",\n  \"args\": {}\n}\n</tool_call>\n\n")
-
+        promptBuilder.append("To use a tool, you must respond ONLY with a single <tool_call> XML tag containing a valid JSON object. Do not add any other text, reasoning, or markdown formatting. After you receive the tool result, you MUST provide a final, user-facing answer and then stop.\n\n") // Added stop instruction
         promptBuilder.append("### EXAMPLE CONVERSATION\n")
         promptBuilder.append("<start_of_turn>user\nWhat is the battery level?<end_of_turn>\n")
         promptBuilder.append("<start_of_turn>model\n<tool_call>\n{\n  \"tool_name\": \"get_device_battery\",\n  \"args\": {}\n}\n</tool_call><end_of_turn>\n")
+        // This is the key addition: show the model what a 'tool' turn looks like
         promptBuilder.append("<start_of_turn>tool\n[Tool Result for get_device_battery]: Device battery is at 85%.<end_of_turn>\n")
         promptBuilder.append("<start_of_turn>model\nYour device battery is at 85%.<end_of_turn>\n\n")
 
+
+        // --- 2. Build Conversation History ---
         history.forEach { message ->
             when (message.type) {
                 MessageType.USER -> {
                     promptBuilder.append("<start_of_turn>user\n${message.text}<end_of_turn>\n")
                 }
                 MessageType.MODEL -> {
-                    // We append model messages, which could be a conversational response or a tool call.
                     if (message.text.isNotBlank()) {
                         promptBuilder.append("<start_of_turn>model\n${message.text}<end_of_turn>\n")
                     }
                 }
-                MessageType.SYSTEM -> {}
-                // CRITICAL: Handle the output from a tool call and feed it back to the model.
+                // Add the tool result into the history with the 'tool' role
                 MessageType.TOOL_RESULT -> {
-                    promptBuilder.append("<start_of_turn>tool\n")
-                    promptBuilder.append(message.text) // This is the tool output
-                    promptBuilder.append("<end_of_turn>\n")
+                    promptBuilder.append("<start_of_turn>tool\n${message.text}<end_of_turn>\n")
                 }
+
+                MessageType.SYSTEM -> {} // System messages are not part of the turn-by-turn history
             }
         }
 
+        // --- 3. Cue the model for its response ---
         promptBuilder.append("<start_of_turn>model\n")
 
         return promptBuilder.toString()
     }
+
 
     private fun buildLlama3Prompt(history: List<UiMessage>): String {
         val historyBuilder = StringBuilder()
