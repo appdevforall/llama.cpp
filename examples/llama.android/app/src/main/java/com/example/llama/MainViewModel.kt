@@ -107,7 +107,6 @@ class MainViewModel(
     ).associateBy { it.name }
 
     private var currentModelFamily: ModelFamily = ModelFamily.UNKNOWN
-    var conversation = listOf<UiMessage>()
 
     private val _uiMessages = MutableLiveData<List<UiMessage>>(
         listOf(
@@ -156,8 +155,8 @@ class MainViewModel(
 
     private fun addMessage(text: String, type: MessageType) {
         val message = UiMessage(messageIdCounter.getAndIncrement(), text, type)
-        conversation = conversation + message
-        _uiMessages.postValue(conversation)
+        val currentMessages = _uiMessages.value.orEmpty()
+        _uiMessages.postValue(currentMessages + message)
     }
 
     fun initializeModelStates(models: List<Downloadable>) {
@@ -248,12 +247,12 @@ class MainViewModel(
     }
 
     private fun updateLastMessageDuration(durationMs: Long) {
-        if (conversation.isNotEmpty()) {
-            val lastMessage = conversation.last()
+        val currentMessages = _uiMessages.value.orEmpty()
+        if (currentMessages.isNotEmpty()) {
+            val lastMessage = currentMessages.last()
             if (lastMessage.type == MessageType.MODEL) {
                 val updatedMessage = lastMessage.copy(durationMs = durationMs)
-                conversation = conversation.dropLast(1) + updatedMessage
-                _uiMessages.postValue(conversation)
+                _uiMessages.postValue(currentMessages.dropLast(1) + updatedMessage)
             }
         }
     }
@@ -289,13 +288,15 @@ class MainViewModel(
         while (currentTurn < maxTurns) {
             Log.d("AgentDebug", "--- [Step ${currentTurn + 1}] ---")
             val isFinalAnswerTurn =
-                conversation.getOrNull(conversation.size - 2)?.type == MessageType.TOOL_RESULT
+                _uiMessages.value?.getOrNull(
+                    (_uiMessages.value?.size ?: 0) - 2
+                )?.type == MessageType.TOOL_RESULT
             val stopStrings = if (isFinalAnswerTurn) {
                 listOf("<end_of_turn>")
             } else {
                 listOf("</tool_call>")
             }
-            val fullPromptHistory = buildPromptWithHistory(conversation)
+            val fullPromptHistory = buildPromptWithHistory(_uiMessages.value.orEmpty())
             Log.d("AgentDebug", "Final Prompt Sent:\n$fullPromptHistory")
             val startTime = System.nanoTime()
             val modelResponse = try {
@@ -467,11 +468,11 @@ class MainViewModel(
     }
 
     private fun updateLastMessage(updatedText: String) {
-        if (conversation.isNotEmpty()) {
-            val lastMessage = conversation.last()
+        val currentMessages = _uiMessages.value.orEmpty()
+        if (currentMessages.isNotEmpty()) {
+            val lastMessage = currentMessages.last()
             val updatedMessage = lastMessage.copy(text = updatedText)
-            conversation = conversation.dropLast(1) + updatedMessage
-            _uiMessages.postValue(conversation)
+            _uiMessages.postValue(currentMessages.dropLast(1) + updatedMessage)
         }
     }
 
@@ -479,7 +480,6 @@ class MainViewModel(
         message = newMessage
     }
     fun clear() {
-        conversation = listOf()
         _uiMessages.value = listOf()
     }
     fun log(message: String) {
