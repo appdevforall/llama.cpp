@@ -514,7 +514,6 @@ class MainViewModel(
     private fun buildGemma2Prompt(history: List<UiMessage>): String {
         val promptBuilder = StringBuilder()
 
-        // --- 1. System Preamble: Define the role, rules, and tools ---
         val toolsAsJsonArray =
             tools.values.joinToString(prefix = "[", postfix = "]", separator = ",\n") { tool ->
                 """  {
@@ -524,21 +523,28 @@ class MainViewModel(
     |  }""".trimMargin()
             }
 
-        promptBuilder.append("You are a helpful assistant. To answer the user's question, you can either respond directly or use one of the following tools.\n\n")
-        promptBuilder.append("### AVAILABLE TOOLS\n")
-        promptBuilder.append(toolsAsJsonArray)
-        promptBuilder.append("\n\n")
-        promptBuilder.append("### RESPONSE FORMAT\n")
-        promptBuilder.append("To use a tool, you must respond ONLY with a single <tool_call> XML tag containing a valid JSON object. Do not add any other text, reasoning, or markdown formatting. After you receive the tool result, you MUST provide a final, user-facing answer and then stop.\n\n") // Added stop instruction
-        promptBuilder.append("### EXAMPLE CONVERSATION\n")
-        promptBuilder.append("<start_of_turn>user\nWhat is the battery level?<end_of_turn>\n")
-        promptBuilder.append("<start_of_turn>model\n<tool_call>\n{\n  \"tool_name\": \"get_device_battery\",\n  \"args\": {}\n}\n</tool_call><end_of_turn>\n")
-        // This is the key addition: show the model what a 'tool' turn looks like
-        promptBuilder.append("<start_of_turn>tool\n[Tool Result for get_device_battery]: Device battery is at 85%.<end_of_turn>\n")
-        promptBuilder.append("<start_of_turn>model\nYour device battery is at 85%.<end_of_turn>\n\n")
+        // A single, clear instruction block
+        val systemInstruction = """
+You are a helpful assistant. You have access to the following tools:
+$toolsAsJsonArray
 
+To use a tool, you must respond ONLY with a single <tool_call> XML tag containing a valid JSON object.
+Example of a tool call:
+<tool_call>
+{
+  "tool_name": "get_current_datetime",
+  "args": {}
+}
+</tool_call>
+
+After the tool is called, you will receive the result in a <start_of_turn>tool turn. You must then use that result to answer the user's original question in a final <start_of_turn>model turn. Do not call another tool after receiving a tool result.
+    """.trimIndent()
+
+        promptBuilder.append(systemInstruction)
+        promptBuilder.append("\n\n") // Separation between system prompt and history
 
         // --- 2. Build Conversation History ---
+        // This part remains the same, but it's now the only thing that uses the turn structure
         history.forEach { message ->
             when (message.type) {
                 MessageType.USER -> {
@@ -549,12 +555,10 @@ class MainViewModel(
                         promptBuilder.append("<start_of_turn>model\n${message.text}<end_of_turn>\n")
                     }
                 }
-                // Add the tool result into the history with the 'tool' role
                 MessageType.TOOL_RESULT -> {
                     promptBuilder.append("<start_of_turn>tool\n${message.text}<end_of_turn>\n")
                 }
-
-                MessageType.SYSTEM -> {} // System messages are not part of the turn-by-turn history
+                MessageType.SYSTEM -> {}
             }
         }
 
