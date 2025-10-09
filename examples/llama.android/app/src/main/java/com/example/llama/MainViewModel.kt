@@ -21,6 +21,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.reduce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -374,34 +375,40 @@ class MainViewModel(
     }
 
     private fun parseToolCall(text: String): ToolCall? {
-        // The original pattern was fine, the problem is that we didn't account for the markdown ```json wrapper
-        // The Pattern.DOTALL flag allows '.' to match newline characters, which is crucial.
+        val toolCalls = mutableListOf<ToolCall>()
+        // The '?' makes the '*' non-greedy, matching the shortest possible string.
         val pattern = Pattern.compile("<tool_call>(.*?)</tool_call>", Pattern.DOTALL)
         val matcher = pattern.matcher(text)
 
-        if (matcher.find()) {
-            val jsonStr = matcher.group(1)?.trim() // This will now correctly find the JSON
+        // Use a while loop to find all occurrences of the pattern
+        while (matcher.find()) {
+            // group(1) contains the string captured by (.*?)
+            val jsonStr = matcher.group(1)?.trim()
 
             if (jsonStr.isNullOrBlank()) {
-                Log.e("ToolParse", "Found tool_call tags but the content was empty.")
-                return null
+                Log.w("ToolParse", "Found empty <tool_call> tags. Skipping.")
+                continue // Move to the next match
             }
 
             try {
                 val json = JSONObject(jsonStr)
                 val toolName = json.getString("tool_name")
                 val argsJson = json.getJSONObject("args")
+
                 val argsMap = mutableMapOf<String, Any>()
                 argsJson.keys().forEach { key ->
                     argsMap[key] = argsJson.get(key)
                 }
-                return ToolCall(toolName, argsMap)
-            } catch (e: Exception) {
-                Log.e("ToolParse", "Failed to parse tool call JSON", e)
-                return null
+
+                toolCalls.add(ToolCall(toolName, argsMap))
+
+            } catch (e: JSONException) {
+                Log.e("ToolParse", "Failed to parse tool call JSON: $jsonStr", e)
+                // Continue to the next match even if one fails
             }
         }
-        return null
+
+        return toolCalls.getOrNull(0)
     }
 
     fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1) {
@@ -496,45 +503,36 @@ class MainViewModel(
     private fun buildGemma2Prompt(history: List<UiMessage>): String {
         val historyBuilder = StringBuilder()
 
-        // --- FINAL REVISED PROMPT STRATEGY FOR GEMMA ---
+        // --- FINAL CORRECTED PROMPT STRATEGY ---
 
-        // 1. System-level instructions come first, outside of any "turn".
+        // 1. System-level instructions are a preamble, outside any "turn".
         historyBuilder.append("You are a helpful assistant. You have access to the following tools:\n")
         val toolDescriptions =
             tools.values.joinToString("\n") { "- `${it.name}`: ${it.description}" }
         historyBuilder.append(toolDescriptions)
         historyBuilder.append("\n\nTo use a tool, respond with a JSON object inside a <tool_call> tag. Example:\n")
         historyBuilder.append("<tool_call>\n{\n  \"tool_name\": \"get_current_datetime\",\n  \"args\": {}\n}\n</tool_call>\n\n")
-
         historyBuilder.append("Do not add any other text or formatting like ```json markdown.\n\n")
 
-        // 2. Build the chat history using the model's turn tokens.
-        // We are deliberately leaving out the most recent user message from this loop.
-        val relevantHistory = history.dropLast(1) // Drop the latest user message
-        relevantHistory.forEach { message ->
+        // 2. Build the ENTIRE chat history using the model's turn tokens.
+        // This loop now correctly processes every message in order.
+        history.forEach { message ->
             when (message.type) {
                 MessageType.USER -> {
                     historyBuilder.append("<start_of_turn>user\n${message.text}<end_of_turn>\n")
                 }
-
                 MessageType.MODEL -> {
+                    // Don't append empty placeholders from the UI
                     if (message.text.isNotBlank()) {
                         historyBuilder.append("<start_of_turn>model\n${message.text}<end_of_turn>\n")
                     }
                 }
-                // Skip system messages in history for this cleaner prompt
+                // Skip system messages (tool results) for this prompt style
                 MessageType.SYSTEM -> {}
             }
         }
 
-        // 3. Add the LATEST user question at the very end.
-        // This is the most important part.
-        val lastUserMessage = history.lastOrNull { it.type == MessageType.USER }
-        if (lastUserMessage != null) {
-            historyBuilder.append("<start_of_turn>user\n${lastUserMessage.text}<end_of_turn>\n")
-        }
-
-        // 4. Prompt the model for its response.
+        // 3. Prompt the model for its response.
         historyBuilder.append("<start_of_turn>model\n")
 
         return historyBuilder.toString()
