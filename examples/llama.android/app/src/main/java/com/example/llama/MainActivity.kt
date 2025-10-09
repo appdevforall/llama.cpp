@@ -258,7 +258,7 @@ class MainActivity(
             result = uri.path
             val cut = result?.lastIndexOf('/')
             if (cut != null && cut != -1) {
-                result = result.substring(cut + 1)
+                result = result?.substring(cut + 1)
             }
         }
         return result ?: "Unknown File"

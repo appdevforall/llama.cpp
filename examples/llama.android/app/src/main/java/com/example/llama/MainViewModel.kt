@@ -195,7 +195,7 @@ class MainViewModel(
             result = uri.path
             val cut = result?.lastIndexOf('/')
             if (cut != null && cut != -1) {
-                result = result.substring(cut + 1)
+                result = result?.substring(cut + 1)
             }
         }
         return result?.ifBlank { "temp_model.gguf" } ?: "temp_model.gguf"
