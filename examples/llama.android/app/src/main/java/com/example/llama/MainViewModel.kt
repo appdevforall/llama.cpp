@@ -273,14 +273,15 @@ class MainViewModel(
 
     private suspend fun runAgentLoop(maxTurns: Int = 5) {
         var currentTurn = 0
-        var fullPromptHistory = buildPromptWithHistory(conversation)
 
         while (currentTurn < maxTurns) {
-            val isFinalAnswerTurn = currentTurn > 0
+            val fullPromptHistory = buildPromptWithHistory(conversation)
+
+            val isFinalAnswerTurn = conversation.lastOrNull()?.type == MessageType.TOOL_RESULT
             val stopStrings = if (isFinalAnswerTurn) {
-                listOf("<|eot_id|>", "<end_of_turn>")
+                listOf("<end_of_turn>") // Allow a natural response
             } else {
-                listOf("<|eot_id|>", "</tool_call>", "<end_of_turn>")
+                listOf("</tool_call>") // Expect a tool call
             }
 
             Log.d("AgentDebug", "--- [Step ${currentTurn + 1}] ---")
@@ -323,35 +324,6 @@ class MainViewModel(
 
                     // 4. IMPORTANT: Add a NEW placeholder for the final answer
                     addMessage("", MessageType.MODEL)
-
-                    // 5. Prepare the prompt for the next turn - THIS IS NOW MODEL-SPECIFIC
-                    when (currentModelFamily) {
-                        ModelFamily.LLAMA3, ModelFamily.UNKNOWN -> {
-                            fullPromptHistory += "$trimmedResponse<|eot_id|>"
-                            fullPromptHistory += """
-                            <|start_header_id|>user<|end_header_id|>
-
-                            [TOOL_RESULT]
-                            $result
-                            [/TOOL_RESULT]<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-
-                            Based on the tool results, here is the answer to the user's question:
-                            """.trimIndent()
-                        }
-
-                        ModelFamily.GEMMA2 -> {
-                            fullPromptHistory += "$trimmedResponse<end_of_turn>\n"
-                            // For Gemma, we present the tool result as new context in the user's turn
-                            fullPromptHistory += """
-                            <start_of_turn>user
-                            [TOOL_RESULT]
-                            $result
-                            [/TOOL_RESULT]
-                            Based on the tool results, here is the answer to my question.<end_of_turn>
-                            <start_of_turn>model
-                            """.trimIndent()
-                        }
-                    }
 
                 } else {
                     val errorMsg = "Error: Model tried to call unknown tool '${toolCall.toolName}'"
@@ -544,15 +516,18 @@ class MainViewModel(
                 MessageType.SYSTEM -> {}
                 // CRITICAL: Handle the output from a tool call and feed it back to the model.
                 MessageType.TOOL_RESULT -> {
-                    promptBuilder.append("<start_of_turn>tool\n") // Use the official 'tool' role for Gemma
-                    promptBuilder.append(message.text) // This should be the data returned by your tool, often as JSON
+                    promptBuilder.append("<start_of_turn>tool\n")
+                    promptBuilder.append(message.text) // This is the tool output
                     promptBuilder.append("<end_of_turn>\n")
                 }
             }
         }
 
-        // --- 3. Prompt the model for its next response ---
-        promptBuilder.append("<start_of_turn>model\n")
+        if (history.lastOrNull()?.type == MessageType.TOOL_RESULT) {
+            promptBuilder.append("<start_of_turn>model\nBased on the tool result, answer the user's question.\n")
+        } else {
+            promptBuilder.append("<start_of_turn>model\n")
+        }
 
         return promptBuilder.toString()
     }
