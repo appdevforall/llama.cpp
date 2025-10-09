@@ -80,6 +80,12 @@ sealed interface DownloadUiState {
     data class Error(val message: String) : DownloadUiState
 }
 
+enum class ModelFamily {
+    LLAMA3,
+    GEMMA2,
+    UNKNOWN // A fallback for models we can't identify
+}
+
 class MainViewModel(
     application: Application,
     private val llamaAndroid: LLamaAndroid = LLamaAndroid.instance()
@@ -91,6 +97,8 @@ class MainViewModel(
         BatteryTool(),
         GetDateTimeTool()
     ).associateBy { it.name }
+
+    private var currentModelFamily: ModelFamily = ModelFamily.UNKNOWN
 
     var conversation = listOf<UiMessage>()
 
@@ -269,9 +277,9 @@ class MainViewModel(
         while (currentTurn < maxTurns) {
             val isFinalAnswerTurn = currentTurn > 0
             val stopStrings = if (isFinalAnswerTurn) {
-                listOf("<|eot_id|>")
+                listOf("<|eot_id|>", "<end_of_turn>")
             } else {
-                listOf("<|eot_id|>", "</tool_call>")
+                listOf("<|eot_id|>", "</tool_call>", "<end_of_turn>")
             }
 
             Log.d("AgentDebug", "--- [Step ${currentTurn + 1}] ---")
@@ -315,17 +323,34 @@ class MainViewModel(
                     // 4. IMPORTANT: Add a NEW placeholder for the final answer
                     addMessage("", MessageType.MODEL)
 
-                    // 5. Prepare the prompt for the next turn
-                    fullPromptHistory += "$trimmedResponse<|eot_id|>"
-                    fullPromptHistory += """
-                <|start_header_id|>user<|end_header_id|>
+                    // 5. Prepare the prompt for the next turn - THIS IS NOW MODEL-SPECIFIC
+                    when (currentModelFamily) {
+                        ModelFamily.LLAMA3, ModelFamily.UNKNOWN -> {
+                            fullPromptHistory += "$trimmedResponse<|eot_id|>"
+                            fullPromptHistory += """
+                            <|start_header_id|>user<|end_header_id|>
 
-                [TOOL_RESULT]
-                $result
-                [/TOOL_RESULT]<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+                            [TOOL_RESULT]
+                            $result
+                            [/TOOL_RESULT]<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
-                Based on the tool results, here is the answer to the user's question:
-                """.trimIndent()
+                            Based on the tool results, here is the answer to the user's question:
+                            """.trimIndent()
+                        }
+
+                        ModelFamily.GEMMA2 -> {
+                            fullPromptHistory += "$trimmedResponse<end_of_turn>\n"
+                            // For Gemma, we present the tool result as new context in the user's turn
+                            fullPromptHistory += """
+                            <start_of_turn>user
+                            [TOOL_RESULT]
+                            $result
+                            [/TOOL_RESULT]
+                            Based on the tool results, here is the answer to my question.<end_of_turn>
+                            <start_of_turn>model
+                            """.trimIndent()
+                        }
+                    }
 
                 } else {
                     val errorMsg = "Error: Model tried to call unknown tool '${toolCall.toolName}'"
@@ -407,6 +432,10 @@ class MainViewModel(
     fun load(pathToModel: String) {
         viewModelScope.launch {
             try {
+                // DETECT and set the model family
+                currentModelFamily = detectModelFamily(pathToModel)
+                log("Detected model family: $currentModelFamily")
+
                 withContext(Dispatchers.IO) {
                     llamaAndroid.load(pathToModel)
                 }
@@ -416,6 +445,22 @@ class MainViewModel(
             } catch (exc: IllegalStateException) {
                 Log.e("ModelLoad", "load() failed", exc)
                 log(exc.message!!)
+            }
+        }
+    }
+
+    private fun detectModelFamily(modelPath: String): ModelFamily {
+        val fileName = File(modelPath).name.lowercase()
+        return when {
+            "gemma" in fileName -> ModelFamily.GEMMA2
+            "llama-3" in fileName || "llama3" in fileName -> ModelFamily.LLAMA3
+            // Add more rules here for other models like phi, mistral, etc.
+            else -> {
+                Log.w(
+                    "ModelDetect",
+                    "Could not determine model family for '$fileName'. Defaulting to Llama3."
+                )
+                ModelFamily.LLAMA3 // Default to the original behavior
             }
         }
     }
@@ -442,6 +487,43 @@ class MainViewModel(
     }
 
     private fun buildPromptWithHistory(history: List<UiMessage>): String {
+        return when (currentModelFamily) {
+            ModelFamily.GEMMA2 -> buildGemma2Prompt(history)
+            ModelFamily.LLAMA3, ModelFamily.UNKNOWN -> buildLlama3Prompt(history)
+        }
+    }
+
+    private fun buildGemma2Prompt(history: List<UiMessage>): String {
+        val historyBuilder = StringBuilder()
+
+        // For Gemma, the system prompt is usually prepended to the first user turn.
+        // We will place our tool instructions before the main conversation starts.
+        historyBuilder.append(masterSystemPrompt)
+        historyBuilder.append("\n\n")
+
+        history.forEach { message ->
+            when (message.type) {
+                MessageType.USER -> {
+                    historyBuilder.append("<start_of_turn>user\n${message.text}<end_of_turn>\n")
+                }
+
+                MessageType.MODEL -> {
+                    // Don't append empty placeholders
+                    if (message.text.isNotBlank()) {
+                        historyBuilder.append("<start_of_turn>model\n${message.text}<end_of_turn>\n")
+                    }
+                }
+                // We'll handle tool results within the agent loop for Gemma
+                MessageType.SYSTEM -> {}
+            }
+        }
+
+        // Prompt the model to start its turn
+        historyBuilder.append("<start_of_turn>model\n")
+        return historyBuilder.toString()
+    }
+
+    private fun buildLlama3Prompt(history: List<UiMessage>): String {
         val historyBuilder = StringBuilder()
 
         // Add the special begin_of_text token ONLY at the start.
@@ -459,7 +541,7 @@ class MainViewModel(
                         historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n${message.text}")
                     }
                 }
-                // There are no SYSTEM messages in the initial turn.
+                // There are no SYSTEM messages in the initial turn for Llama 3.
                 MessageType.SYSTEM -> {}
             }
         }
