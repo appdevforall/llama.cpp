@@ -293,9 +293,10 @@ class MainViewModel(
                 "Error: Could not get a response from the model."
             }
             val durationMs = (System.nanoTime() - startTime) / 1_000_000
-            val finalResponse = modelResponse.split(stopStrings.first()).first()
-            Log.d("AgentDebug", "Raw Model Result: \"$modelResponse\"")
-            Log.d("AgentDebug", "Trimmed Final Result: \"$finalResponse\"")
+            val finalResponse = modelResponse
+            println("--- VIEWMODEL TRACE ---")
+            println("modelResponse from LLM is: '$modelResponse'")
+            println("finalResponse passed to parser is: '$finalResponse'")
 
             if (isFinalAnswerTurn) {
                 updateLastMessage(finalResponse)
@@ -303,7 +304,9 @@ class MainViewModel(
                 break
             } else {
                 val toolCall = parseToolCall(finalResponse, tools.keys)
+                println("ViewModel received from parser: $toolCall")
                 if (toolCall != null) {
+                    println("ViewModel logic: Tool call is NOT NULL. Correct path.")
                     val toolCallString =
                         "<tool_call>\n" + "{\n" + "  \"tool_name\": \"${toolCall.toolName}\",\n" + "  \"args\": {}\n" + "}\n" + "</tool_call>"
                     updateLastMessageDuration(durationMs)
@@ -320,6 +323,7 @@ class MainViewModel(
                         break
                     }
                 } else {
+                    Log.e("TOOL_DEBUG", "ViewModel logic: Tool call is NULL. BUG PATH taken.")
                     updateLastMessage(finalResponse)
                     updateLastMessageDuration(durationMs)
                     break
