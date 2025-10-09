@@ -160,7 +160,8 @@ class MainViewModel(
 
     fun initializeModelStates(models: List<Downloadable>) {
         val initialState = models.associate { model ->
-            val state = if (model.destination.exists()) DownloadUiState.Downloaded else DownloadUiState.Ready
+            val state =
+                if (model.destination.exists()) DownloadUiState.Downloaded else DownloadUiState.Ready
             model.name to state
         }
         _modelStates.value = initialState
@@ -376,15 +377,48 @@ class MainViewModel(
     }
 
     private fun parseToolCall(responseText: String): ToolCall? {
-        // Step 1: Find the potential JSON string using our new strategy.
-        val potentialJsonString = findPotentialJsonObjectString(responseText)
-
-        // Step 2: If a string was found, try to parse it.
-        if (potentialJsonString != null) {
-            return parseJsonObjectToToolCall(potentialJsonString)
+        // --- Strategy 1: Look for perfect JSON (the "happy path") ---
+        // First, we try to find and parse a clean JSON object. This works for capable models.
+        val jsonString = findPotentialJsonObjectString(responseText)
+        if (jsonString != null) {
+            val toolCallFromJson = parseJsonObjectToToolCall(jsonString)
+            if (toolCallFromJson != null) {
+                Log.d("ToolParse", "Successfully parsed tool call from well-formed JSON.")
+                return toolCallFromJson
+            }
         }
 
-        return null // No valid JSON object string was found.
+        // --- Strategy 2: Recovery Mode for malformed responses ---
+        // If JSON parsing fails, we enter recovery mode. This is crucial for smaller models
+        // that might just output the tool name without the proper JSON structure.
+        Log.w(
+            "ToolParse",
+            "Could not parse JSON. Attempting recovery by searching for tool name..."
+        )
+
+        // Extract any text that might be inside a <tool_call> tag.
+        val tagContent = responseText.substringAfter("<tool_call>", "")
+            .substringBefore("</tool_call>", "").trim()
+
+        if (tagContent.isNotBlank()) {
+            // Check if any of our known tool names are mentioned inside the tag.
+            for (toolName in tools.keys) {
+                if (tagContent.contains(toolName)) {
+                    Log.d(
+                        "ToolParse",
+                        "RECOVERY SUCCESS: Found tool name '$toolName' in malformed output."
+                    )
+                    // We successfully recovered the intent! Assume no arguments.
+                    return ToolCall(toolName, emptyMap())
+                }
+            }
+        }
+
+        Log.e(
+            "ToolParse",
+            "RECOVERY FAILED: No valid JSON or known tool name found in the response."
+        )
+        return null // Give up if both strategies fail.
     }
 
     /**
@@ -507,6 +541,7 @@ class MainViewModel(
             _uiMessages.postValue(conversation)
         }
     }
+
     fun updateMessage(newMessage: String) {
         message = newMessage
     }
@@ -577,14 +612,17 @@ Your device's battery is at 85%.<end_of_turn>
                 MessageType.USER -> {
                     promptBuilder.append("<start_of_turn>user\n${message.text}<end_of_turn>\n")
                 }
+
                 MessageType.MODEL -> {
                     if (message.text.isNotBlank()) {
                         promptBuilder.append("<start_of_turn>model\n${message.text}<end_of_turn>\n")
                     }
                 }
+
                 MessageType.TOOL_RESULT -> {
                     promptBuilder.append("<start_of_turn>tool\n${message.text}<end_of_turn>\n")
                 }
+
                 MessageType.SYSTEM -> {}
             }
         }
@@ -636,9 +674,11 @@ Your device's battery is at 85%.<end_of_turn>
             is DownloadUiState.Downloaded -> {
                 load(item.destination.path)
             }
+
             is DownloadUiState.Ready, is DownloadUiState.Error, null -> {
                 startDownload(item, dm)
             }
+
             is DownloadUiState.Downloading -> {
                 // Already downloading, do nothing
             }
