@@ -374,19 +374,20 @@ class MainViewModel(
     }
 
     private fun parseToolCall(text: String): ToolCall? {
+        // The original pattern was fine, the problem is that we didn't account for the markdown ```json wrapper
+        // The Pattern.DOTALL flag allows '.' to match newline characters, which is crucial.
         val pattern = Pattern.compile("<tool_call>(.*?)</tool_call>", Pattern.DOTALL)
         val matcher = pattern.matcher(text)
-        if (matcher.find()) {
-            val jsonStr = matcher.group(1)?.trim()
 
-            // FIX 1: Add a null/blank check for the extracted string
+        if (matcher.find()) {
+            val jsonStr = matcher.group(1)?.trim() // This will now correctly find the JSON
+
             if (jsonStr.isNullOrBlank()) {
                 Log.e("ToolParse", "Found tool_call tags but the content was empty.")
                 return null
             }
 
             try {
-                // Now jsonStr is guaranteed to be a non-null String
                 val json = JSONObject(jsonStr)
                 val toolName = json.getString("tool_name")
                 val argsJson = json.getJSONObject("args")
@@ -394,7 +395,6 @@ class MainViewModel(
                 argsJson.keys().forEach { key ->
                     argsMap[key] = argsJson.get(key)
                 }
-                // FIX 2: This now matches the updated ToolCall data class
                 return ToolCall(toolName, argsMap)
             } catch (e: Exception) {
                 Log.e("ToolParse", "Failed to parse tool call JSON", e)
@@ -505,6 +505,8 @@ class MainViewModel(
         historyBuilder.append(toolDescriptions)
         historyBuilder.append("\n\nTo use a tool, respond with a JSON object inside a <tool_call> tag. Example:\n")
         historyBuilder.append("<tool_call>\n{\n  \"tool_name\": \"get_current_datetime\",\n  \"args\": {}\n}\n</tool_call>\n\n")
+
+        historyBuilder.append("Do not add any other text or formatting like ```json markdown.\n\n")
 
         // 2. Build the chat history using the model's turn tokens.
         // We are deliberately leaving out the most recent user message from this loop.
