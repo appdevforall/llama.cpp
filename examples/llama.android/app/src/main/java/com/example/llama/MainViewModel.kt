@@ -496,31 +496,34 @@ class MainViewModel(
     private fun buildGemma2Prompt(history: List<UiMessage>): String {
         val historyBuilder = StringBuilder()
 
-        // For Gemma, the system prompt is usually prepended to the first user turn.
-        // We will place our tool instructions before the main conversation starts.
-        historyBuilder.append(masterSystemPrompt)
-        historyBuilder.append("\n\n")
+        // --- REVISED PROMPT STRATEGY FOR GEMMA ---
+        // 1. Give the model its persona and access to tools.
+        historyBuilder.append("You are a helpful assistant with access to the following tools:\n")
+        historyBuilder.append("[AVAILABLE_TOOLS]\n\n")
 
-        history.forEach { message ->
+        // 2. Provide the conversation history.
+        val conversationHistory = history.joinToString("\n") { message ->
             when (message.type) {
-                MessageType.USER -> {
-                    historyBuilder.append("<start_of_turn>user\n${message.text}<end_of_turn>\n")
-                }
-
-                MessageType.MODEL -> {
-                    // Don't append empty placeholders
-                    if (message.text.isNotBlank()) {
-                        historyBuilder.append("<start_of_turn>model\n${message.text}<end_of_turn>\n")
-                    }
-                }
-                // We'll handle tool results within the agent loop for Gemma
-                MessageType.SYSTEM -> {}
+                MessageType.USER -> "user: ${message.text}"
+                MessageType.MODEL -> if (message.text.isNotBlank()) "assistant: ${message.text}" else ""
+                else -> ""
             }
-        }
+        }.trim()
+        historyBuilder.append("## Conversation History:\n$conversationHistory\n\n")
 
-        // Prompt the model to start its turn
-        historyBuilder.append("<start_of_turn>model\n")
-        return historyBuilder.toString()
+        // 3. Explicitly ask it to decide if a tool is needed.
+        historyBuilder.append("## Instructions:\n")
+        historyBuilder.append("Is a tool needed to answer the user's last question? If so, respond with a JSON tool call. If not, answer the question directly.\n")
+        historyBuilder.append("Your response should be either a direct answer or a JSON object within a <tool_call> tag and nothing else.\n")
+        historyBuilder.append("\nExample of a tool call:\n<tool_call>\n{\n  \"tool_name\": \"get_current_datetime\",\n  \"args\": {}\n}\n</tool_call>\n")
+
+        // Replace the placeholder with the actual tool descriptions
+        val toolDescriptions =
+            tools.values.joinToString("\n") { "- `${it.name}`: ${it.description}" }
+        val finalPrompt = historyBuilder.toString().replace("[AVAILABLE_TOOLS]", toolDescriptions)
+
+        // Use Gemma's turn-based tokens ONLY at the very end
+        return "<start_of_turn>user\n$finalPrompt<end_of_turn>\n<start_of_turn>model\n"
     }
 
     private fun buildLlama3Prompt(history: List<UiMessage>): String {
