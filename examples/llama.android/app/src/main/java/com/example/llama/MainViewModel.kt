@@ -76,6 +76,10 @@ enum class ModelFamily {
 class MainViewModel(
     application: Application,
     private val llamaAndroid: LLamaAndroid = LLamaAndroid.instance(),
+    private val tools: Map<String, Tool> = listOf(
+        BatteryTool(),
+        GetDateTimeTool()
+    ).associateBy { it.name },
     mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : AndroidViewModel(application) {
@@ -84,11 +88,6 @@ class MainViewModel(
 
     private val messageIdCounter = AtomicLong(0)
     private val _contextSize = MutableLiveData(0)
-    val contextSize: LiveData<Int> get() = _contextSize
-    private val tools: Map<String, Tool> = listOf(
-        BatteryTool(),
-        GetDateTimeTool()
-    ).associateBy { it.name }
 
     private var currentModelFamily: ModelFamily = ModelFamily.UNKNOWN
 

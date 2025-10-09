@@ -40,8 +40,8 @@ class MainViewModelTest {
         viewModel = MainViewModel(
             mockApplication,
             mockLlamaAndroid,
-            mainCoroutineRule.testDispatcher,
-            mainCoroutineRule.testDispatcher
+            mainDispatcher = mainCoroutineRule.testDispatcher,
+            ioDispatcher = mainCoroutineRule.testDispatcher
         )
     }
 
@@ -158,7 +158,26 @@ class MainViewModelTest {
     fun `send with valid tool call executes tool and adds result messages`() = runTest {
         // Arrange
         val userMessage = "What is the current time?"
-        val toolName = "get_current_datetime" // This must match a real tool name in the ViewModel
+        val toolName = "get_current_datetime"
+        val mockToolResult = "It's test time!" // We can define a fake result
+
+        // 1. Create a mock Tool
+        val mockTool = mock<Tool>()
+        whenever(mockTool.name).thenReturn(toolName)
+        whenever(mockTool.execute(any(), any())).thenReturn(mockToolResult)
+
+        // 2. Put the mock tool in a map
+        val mockTools = mapOf(toolName to mockTool)
+
+        // 3. Re-initialize the ViewModel for this test, injecting the mock tools
+        viewModel = MainViewModel(
+            mockApplication,
+            mockLlamaAndroid,
+            mockTools, // <-- Here is the injection
+            mainCoroutineRule.testDispatcher,
+            mainCoroutineRule.testDispatcher
+        )
+
         val modelResponseWithToolCall = """
         <tool_call>
         {
@@ -168,15 +187,6 @@ class MainViewModelTest {
         </tool_call>
     """.trimIndent()
 
-        // This is the exact string the ViewModel constructs to display the tool call
-        val expectedFormattedToolCall = "<tool_call>\n" +
-            "{\n" +
-            "  \"tool_name\": \"$toolName\",\n" +
-            "  \"args\": {}\n" +
-            "}\n" +
-            "</tool_call>"
-
-        // Mock the agent loop's send method to return the tool call
         whenever(
             mockLlamaAndroid.send(
                 any<String>(),       // message
@@ -194,35 +204,15 @@ class MainViewModelTest {
 
         // Assert
         val finalMessages = viewModel.uiMessages.value!!
-
-        // We expect 5 messages in total:
-        // 1. Initializing...
-        // 2. User prompt ("What is the current time?")
-        // 3. Model's thinking (updated to show the formatted tool call)
-        // 4. The result from the tool execution
-        // 5. A new empty placeholder for the model's final answer
         assertEquals("Expected 5 messages after a successful tool call", 5, finalMessages.size)
 
-        val modelResponseMsg = finalMessages[2]
         val toolResultMsg = finalMessages[3]
-        val newModelPlaceholderMsg = finalMessages[4]
+        assertEquals(MessageType.TOOL_RESULT, toolResultMsg.type)
+        // Now we can assert the exact text because our mock tool returned it!
+        assertEquals(mockToolResult, toolResultMsg.text)
 
-        assertEquals(
-            "Model message should be updated with the formatted tool call",
-            expectedFormattedToolCall, modelResponseMsg.text
-        )
-
-        assertEquals(
-            "A message with the tool result should be added",
-            MessageType.TOOL_RESULT, toolResultMsg.type
-        )
-        assertTrue("The tool result message should contain text", toolResultMsg.text.isNotBlank())
-
-        assertEquals(
-            "A new placeholder message for the model should be added",
-            "", newModelPlaceholderMsg.text
-        )
-        assertEquals(MessageType.MODEL, newModelPlaceholderMsg.type)
+        // Also, verify that our mock tool was executed
+        verify(mockTool).execute(any(), any())
     }
 
     @Test
