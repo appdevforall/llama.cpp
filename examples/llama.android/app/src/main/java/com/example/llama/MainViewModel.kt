@@ -297,10 +297,12 @@ class MainViewModel(
                 Log.e("AgentLoop", "Model inference failed", e)
                 "Error: Could not get a response from the model."
             }
-            Log.d("AgentDebug", "Raw Model Result: \"$modelResponse\"")
+            val finalResponse = modelResponse.split(stopStrings.first()).first()
 
-            // Check for tool calls first
-            val toolCall = parseToolCall(modelResponse)
+            Log.d("AgentDebug", "Raw Model Result: \"$modelResponse\"")
+            Log.d("AgentDebug", "Trimmed Final Result: \"$finalResponse\"") // New log for debugging
+
+            val toolCall = parseToolCall(finalResponse)
 
             if (toolCall != null) {
                 // --- A TOOL CALL WAS FOUND ---
@@ -499,9 +501,10 @@ class MainViewModel(
 
         promptBuilder.append("### EXAMPLE CONVERSATION\n")
         promptBuilder.append("<start_of_turn>user\nWhat is the battery level?<end_of_turn>\n")
-        promptBuilder.append("<start_of_turn>model\n<tool_call>\n{\n  \"tool_name\": \"get_device_battery\",\n  \"args\": {}\n}\n</tool_call><end_of_turn>\n\n")
+        promptBuilder.append("<start_of_turn>model\n<tool_call>\n{\n  \"tool_name\": \"get_device_battery\",\n  \"args\": {}\n}\n</tool_call><end_of_turn>\n")
+        promptBuilder.append("<start_of_turn>tool\n[Tool Result for get_device_battery]: Device battery is at 85%.<end_of_turn>\n")
+        promptBuilder.append("<start_of_turn>model\nYour device battery is at 85%.<end_of_turn>\n\n")
 
-        // --- 2. Build the conversation history with correct turn structure ---
         history.forEach { message ->
             when (message.type) {
                 MessageType.USER -> {
@@ -523,11 +526,7 @@ class MainViewModel(
             }
         }
 
-        if (history.lastOrNull()?.type == MessageType.TOOL_RESULT) {
-            promptBuilder.append("<start_of_turn>model\nBased on the tool result, answer the user's question.\n")
-        } else {
-            promptBuilder.append("<start_of_turn>model\n")
-        }
+        promptBuilder.append("<start_of_turn>model\n")
 
         return promptBuilder.toString()
     }
