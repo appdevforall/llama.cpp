@@ -89,6 +89,13 @@
                 android:checked="true"
                 android:text="Stream Response" />
 
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/toolUseSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:checked="true"
+                android:text="Use Tools &amp; History" />
+
             <Button
                 android:id="@+id/clearButton"
                 style="@style/Widget.Material3.Button.TextButton"

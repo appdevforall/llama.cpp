@@ -160,6 +160,11 @@ class MainActivity(
             viewModel.setStreaming(isChecked)
         }
 
+        binding.toolUseSwitch.isChecked = viewModel.isToolUseEnabled
+        binding.toolUseSwitch.setOnCheckedChangeListener { _, isChecked ->
+            viewModel.setToolUse(isChecked)
+        }
+
         viewModel.initializeModelStates(models)
     }
 

@@ -108,8 +108,15 @@ class MainViewModel(
     var isStreamingEnabled = true
         private set
 
+    var isToolUseEnabled = true
+        private set
+
     fun setStreaming(isEnabled: Boolean) {
         isStreamingEnabled = isEnabled
+    }
+
+    fun setToolUse(isEnabled: Boolean) {
+        isToolUseEnabled = isEnabled
     }
 
     private val masterSystemPrompt: String by lazy {
@@ -213,9 +220,8 @@ class MainViewModel(
         if (text.isBlank()) return
         message = ""
 
-        // <<< LOG 1: The initial user input >>>
-        Log.d("AgentDebug", "--- NEW REQUEST ---")
-        Log.d("AgentDebug", "User Input: \"$text\"")
+        Log.d("ViewModelSend", "--- NEW REQUEST ---")
+        Log.d("ViewModelSend", "User Input: \"$text\"")
 
         addMessage(text, MessageType.USER)
 
@@ -224,7 +230,35 @@ class MainViewModel(
 
         viewModelScope.launch {
             llamaAndroid.clearKvCache()
-            runAgentLoop()
+            if (isToolUseEnabled) {
+                runAgentLoop()
+            } else {
+                runSimpleInference(text)
+            }
+        }
+    }
+
+    private suspend fun runSimpleInference(prompt: String) {
+        Log.d("SimpleInference", "Running simple inference with prompt: \"$prompt\"")
+        try {
+            withContext(Dispatchers.IO) {
+                if (isStreamingEnabled) {
+                    var currentText = ""
+                    llamaAndroid.send(prompt).collect { responseChunk ->
+                        currentText += responseChunk
+                        updateLastMessage(currentText)
+                    }
+                } else {
+                    val modelResponse = llamaAndroid.send(prompt)
+                        .reduce { acc, s -> acc + s }
+                    updateLastMessage(modelResponse)
+                }
+            }
+            Log.d("SimpleInference", "Simple inference complete.")
+        } catch (e: Exception) {
+            val errorMsg = "Error: Could not get a response from the model."
+            Log.e("SimpleInference", "Model inference failed", e)
+            updateLastMessage(errorMsg)
         }
     }
 
