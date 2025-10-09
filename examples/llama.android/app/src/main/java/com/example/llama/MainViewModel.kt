@@ -15,9 +15,10 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.reduce
 import kotlinx.coroutines.launch
@@ -100,6 +101,9 @@ class MainViewModel(
     private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : AndroidViewModel(application) {
+
+    private val customScope = CoroutineScope(SupervisorJob() + mainDispatcher)
+
     private val messageIdCounter = AtomicLong(0)
     private val _contextSize = MutableLiveData(0)
     val contextSize: LiveData<Int> get() = _contextSize
@@ -177,7 +181,7 @@ class MainViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        viewModelScope.launch(mainDispatcher) {
+        customScope.launch(mainDispatcher) {
             try {
                 llamaAndroid.unload()
             } catch (exc: IllegalStateException) {
@@ -212,7 +216,7 @@ class MainViewModel(
     }
 
     fun loadModelFromUri(uri: Uri, context: Context) {
-        viewModelScope.launch(mainDispatcher) {
+        customScope.launch(mainDispatcher) {
             try {
                 val destinationFile = withContext(ioDispatcher) {
                     val fileName = getFileName(context, uri)
@@ -247,7 +251,7 @@ class MainViewModel(
         val placeholder = if (isStreamingEnabled) "" else "..."
         addMessage(placeholder, MessageType.MODEL)
 
-        viewModelScope.launch(mainDispatcher) {
+        customScope.launch(mainDispatcher) {
             llamaAndroid.clearKvCache()
             if (isToolUseEnabled) {
                 runAgentLoop()
@@ -451,7 +455,7 @@ class MainViewModel(
     }
 
     fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1) {
-        viewModelScope.launch(mainDispatcher) {
+        customScope.launch(mainDispatcher) {
             try {
                 val start = System.nanoTime()
                 val warmupResult = llamaAndroid.bench(pp, tg, pl, nr)
@@ -476,7 +480,7 @@ class MainViewModel(
     }
 
     fun load(pathToModel: String) {
-        viewModelScope.launch(mainDispatcher) {
+        customScope.launch(mainDispatcher) {
             try {
                 currentModelFamily = detectModelFamily(pathToModel)
                 log("Detected model family: $currentModelFamily")
@@ -665,7 +669,7 @@ Your device's battery is at 85%.<end_of_turn>
         log("Saving ${item.name} to ${item.destination.path}")
         val id = dm.enqueue(request)
 
-        viewModelScope.launch {
+        customScope.launch {
             monitorDownload(item, id, dm)
         }
     }

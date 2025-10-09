@@ -69,7 +69,6 @@ class MainViewModelTest {
 
         viewModel.send()
 
-        // FIXED: Use .value directly to avoid race conditions with LiveData observers
         val messages = viewModel.uiMessages.value!!
         assertEquals("Expected 3 messages (Initial, User, Model Placeholder)", 3, messages.size)
         assertEquals(userMessage, messages[1].text)
@@ -94,7 +93,7 @@ class MainViewModelTest {
         val modelPath = "/fake/path/to/model.gguf"
         val expectedContextSize = 2048
         whenever(mockLlamaAndroid.getContextSize()).thenReturn(expectedContextSize)
-        // Note: We don't need to mock llamaAndroid.load() because it returns Unit
+        // No need to mock llamaAndroid.load(), as it returns Unit and mocks do nothing by default.
 
         viewModel.load(modelPath)
 
