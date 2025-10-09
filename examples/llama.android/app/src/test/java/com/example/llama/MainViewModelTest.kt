@@ -93,14 +93,15 @@ class MainViewModelTest {
         // Given
         val userMessage = "What is the time?"
         viewModel.updateMessage(userMessage)
-        whenever(mockLlamaAndroid.send(any(), any(), any())) doReturn flowOf("Response")
+        // FIXED: Use 4 matchers because the send method has 4 arguments
+        whenever(mockLlamaAndroid.send(any(), any(), any(), any())) doReturn flowOf("Response")
 
         // When
         viewModel.send()
 
         // Then verify that the underlying llama instance was called
-        // We use runTest to ensure the coroutine in send() completes
-        verify(mockLlamaAndroid).send(any(), any(), any())
+        // FIXED: Verify with 4 matchers
+        verify(mockLlamaAndroid).send(any(), any(), any(), any())
     }
 
     @Test
@@ -130,7 +131,6 @@ class MainViewModelTest {
         // When load is called
         viewModel.load(modelPath)
 
-        // Then the log should contain the error message
         val messages = viewModel.uiMessages.getOrAwaitValue()
         assertTrue(messages.any { it.text == errorMessage })
     }
