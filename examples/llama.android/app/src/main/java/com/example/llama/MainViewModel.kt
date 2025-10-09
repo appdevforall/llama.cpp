@@ -616,11 +616,13 @@ Your device's battery is at 85%.<end_of_turn>
                 MessageType.USER -> {
                     historyBuilder.append("<|start_header_id|>user<|end_header_id|>\n\n${message.text}<|eot_id|>")
                 }
+
                 MessageType.MODEL -> {
                     if (message.text.isNotBlank()) {
                         historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n${message.text}")
                     }
                 }
+
                 MessageType.SYSTEM -> {}
                 MessageType.TOOL_RESULT -> {
                     historyBuilder.append("<|start_header_id|>tool<|end_header_id|>\n")
