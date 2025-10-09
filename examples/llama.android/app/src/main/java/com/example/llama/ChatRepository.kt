@@ -60,6 +60,8 @@ class ChatRepository(
     )
     val messages: StateFlow<List<UiMessage>> = _messages.asStateFlow()
 
+    private var loadedModelPath: String? = null
+
     // --- Public API for ViewModel ---
 
     suspend fun sendMessage(
@@ -81,21 +83,51 @@ class ChatRepository(
     }
 
     suspend fun loadModel(pathToModel: String) {
+        // --- NEW LOGIC: START ---
+
+        // 1. Check if the user is trying to load the model that's already active.
+        if (pathToModel == loadedModelPath) {
+            val message = "Model is already loaded."
+            Log.d(tag, message)
+            addMessage(message, MessageType.SYSTEM)
+            return // Exit the function early
+        }
+
         try {
+            // 2. Check if a *different* model is loaded. If so, unload it first.
+            if (loadedModelPath != null) {
+                Log.d(tag, "Switching models. Unloading: $loadedModelPath")
+                addMessage("Unloading previous model...", MessageType.SYSTEM)
+                withContext(ioDispatcher) {
+                    llamaAndroid.unload()
+                }
+            }
+
+            // --- NEW LOGIC: END ---
+
+
+            // --- Original logic continues below ---
             currentModelFamily = detectModelFamily(pathToModel)
             addMessage("Detected model family: $currentModelFamily", MessageType.SYSTEM)
             withContext(ioDispatcher) {
                 llamaAndroid.load(pathToModel)
             }
+
+            // If loading was successful, update our tracker variable
+            loadedModelPath = pathToModel
             addMessage("Loaded $pathToModel", MessageType.SYSTEM)
+
             val contextSize = llamaAndroid.getContextSize()
             addMessage("Model context size: $contextSize tokens", MessageType.SYSTEM)
+
         } catch (exc: IllegalStateException) {
             Log.e(tag, "loadModel() failed", exc)
             addMessage(
                 exc.message ?: "An unknown error occurred during model loading.",
                 MessageType.SYSTEM
             )
+            // If loading fails, make sure our tracker is cleared.
+            loadedModelPath = null
         }
     }
 
@@ -368,9 +400,9 @@ Your device's battery is at 85%.<end_of_turn>
     }
 
     suspend fun cleanup() {
-        // This method can be called from ViewModel's onCleared.
         try {
             llamaAndroid.unload()
+            loadedModelPath = null // Also clear the tracker here
             Log.d(tag, "LLamaAndroid resources unloaded successfully.")
         } catch (e: Exception) {
             Log.e(tag, "Error during LLamaAndroid unload", e)
