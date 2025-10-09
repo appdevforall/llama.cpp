@@ -25,9 +25,6 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.llama.databinding.ActivityMainBinding
 import java.io.File
 
-const val SAVED_MODEL_URI_KEY = "saved_model_uri"
-private const val PREFS_NAME = "LlamaPrefs"
-
 class MainActivity(
     activityManager: ActivityManager? = null,
     downloadManager: DownloadManager? = null,
