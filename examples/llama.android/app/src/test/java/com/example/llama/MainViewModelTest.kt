@@ -153,4 +153,119 @@ class MainViewModelTest {
         // Verify that the correct, single-argument send method was called.
         verify(mockLlamaAndroid).send(userMessage)
     }
+
+    @Test
+    fun `send with valid tool call executes tool and adds result messages`() = runTest {
+        // Arrange
+        val userMessage = "What is the current time?"
+        val toolName = "get_current_datetime" // This must match a real tool name in the ViewModel
+        val modelResponseWithToolCall = """
+        <tool_call>
+        {
+          "tool_name": "$toolName",
+          "args": {}
+        }
+        </tool_call>
+    """.trimIndent()
+
+        // This is the exact string the ViewModel constructs to display the tool call
+        val expectedFormattedToolCall = "<tool_call>\n" +
+            "{\n" +
+            "  \"tool_name\": \"$toolName\",\n" +
+            "  \"args\": {}\n" +
+            "}\n" +
+            "</tool_call>"
+
+        // Mock the agent loop's send method to return the tool call
+        whenever(
+            mockLlamaAndroid.send(
+                any<String>(),       // message
+                any<Boolean>(),      // formatChat
+                any<List<String>>(), // stop
+                any<Boolean>()
+            )
+        ) doReturn flowOf(modelResponseWithToolCall)
+
+        viewModel.updateMessage(userMessage)
+
+        // Act
+        viewModel.send()
+        mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle()
+
+        // Assert
+        val finalMessages = viewModel.uiMessages.value!!
+
+        // We expect 5 messages in total:
+        // 1. Initializing...
+        // 2. User prompt ("What is the current time?")
+        // 3. Model's thinking (updated to show the formatted tool call)
+        // 4. The result from the tool execution
+        // 5. A new empty placeholder for the model's final answer
+        assertEquals("Expected 5 messages after a successful tool call", 5, finalMessages.size)
+
+        val modelResponseMsg = finalMessages[2]
+        val toolResultMsg = finalMessages[3]
+        val newModelPlaceholderMsg = finalMessages[4]
+
+        assertEquals(
+            "Model message should be updated with the formatted tool call",
+            expectedFormattedToolCall, modelResponseMsg.text
+        )
+
+        assertEquals(
+            "A message with the tool result should be added",
+            MessageType.TOOL_RESULT, toolResultMsg.type
+        )
+        assertTrue("The tool result message should contain text", toolResultMsg.text.isNotBlank())
+
+        assertEquals(
+            "A new placeholder message for the model should be added",
+            "", newModelPlaceholderMsg.text
+        )
+        assertEquals(MessageType.MODEL, newModelPlaceholderMsg.type)
+    }
+
+    @Test
+    fun `send with unknown tool call updates message with error`() = runTest {
+        // Arrange
+        val userMessage = "Make me a sandwich"
+        val unknownToolName = "make_a_sandwich"
+        val modelResponseWithUnknownTool = """
+        <tool_call>
+        {
+          "tool_name": "$unknownToolName",
+          "args": {}
+        }
+        </tool_call>
+    """.trimIndent()
+        val expectedErrorMessage = "Error: Model tried to call unknown tool '$unknownToolName'"
+
+        whenever(
+            mockLlamaAndroid.send(
+                any<String>(),       // message
+                any<Boolean>(),      // formatChat
+                any<List<String>>(), // stop
+                any<Boolean>()
+            )
+        ) doReturn flowOf(modelResponseWithUnknownTool)
+
+        viewModel.updateMessage(userMessage)
+
+        // Act
+        viewModel.send()
+        mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle()
+
+        // Assert
+        val finalMessages = viewModel.uiMessages.value!!
+
+        // We expect only 3 messages: Initial, User, and the final updated Model message with the error
+        assertEquals("Expected 3 messages after an unknown tool call", 3, finalMessages.size)
+
+        val lastMessage = finalMessages.last()
+        assertEquals(MessageType.MODEL, lastMessage.type)
+        assertEquals(
+            "Last message should contain the unknown tool error",
+            expectedErrorMessage, lastMessage.text
+        )
+    }
 }
