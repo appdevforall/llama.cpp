@@ -21,7 +21,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.reduce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
@@ -350,64 +349,51 @@ class MainViewModel(
     }
 
     private fun parseToolCall(responseText: String): ToolCall? {
-        // --- Strategy 1: Look for <tool_call> tags first ---
-        val tagPattern = Pattern.compile("<tool_call>(.*?)</tool_call>", Pattern.DOTALL)
-        val tagMatcher = tagPattern.matcher(responseText)
-        val toolCalls = mutableListOf<ToolCall>()
+        // Step 1: Find the potential JSON string using our new strategy.
+        val potentialJsonString = findPotentialJsonObjectString(responseText)
 
-        while (tagMatcher.find()) {
-            val jsonStr = tagMatcher.group(1)?.trim()
-            if (!jsonStr.isNullOrBlank()) {
-                // This helper function (defined below) parses a single JSON object string
-                parseJsonObjectToToolCall(jsonStr)?.let { toolCalls.add(it) }
-            }
+        // Step 2: If a string was found, try to parse it.
+        if (potentialJsonString != null) {
+            return parseJsonObjectToToolCall(potentialJsonString)
         }
 
-        // If we found any matches with the tags, we're done.
-        if (toolCalls.isNotEmpty()) {
-            return toolCalls.getOrNull(0)
-        }
-
-        // --- Strategy 2 & 3: No tags found, look for markdown or raw JSON ---
-        var potentialJson = responseText.trim()
-
-        // Look for markdown block ```json ... ``` or ``` ... ```
-        val markdownPattern = Pattern.compile("```(?:json)?\\s*(.*?)\\s*```", Pattern.DOTALL)
-        val markdownMatcher = markdownPattern.matcher(potentialJson)
-
-        if (markdownMatcher.find()) {
-            potentialJson = markdownMatcher.group(1)?.trim() ?: ""
-        }
-
-        // Now, try to parse the extracted string, which might be an object or an array
-        if (potentialJson.isBlank()) {
-            return null
-        }
-
-        try {
-            // Check if it's a JSON array (starts with '[') for multiple tool calls
-            if (potentialJson.startsWith("[")) {
-                val jsonArray = JSONArray(potentialJson)
-                for (i in 0 until jsonArray.length()) {
-                    val jsonObjectStr = jsonArray.getJSONObject(i).toString()
-                    parseJsonObjectToToolCall(jsonObjectStr)?.let { toolCalls.add(it) }
-                }
-            }
-            // Otherwise, assume it's a single JSON object (starts with '{')
-            else if (potentialJson.startsWith("{")) {
-                parseJsonObjectToToolCall(potentialJson)?.let { toolCalls.add(it) }
-            }
-        } catch (e: JSONException) {
-            Log.e("ToolParse", "Failed to parse potential JSON after checking tags.", e)
-        }
-
-        return toolCalls.getOrNull(0)
+        return null // No valid JSON object string was found.
     }
 
     /**
-     * Helper function to parse a string representing a single JSON Object into a ToolCall.
-     * @param jsonStr The JSON string to parse.
-     * @return A ToolCall object, or null if parsing fails.
+     * [UPDATED/MORE ROBUST]
+     * Helper function that isolates a potential JSON object string (`{...}`).
+     * It robustly finds the first '{' and last '}' to handle surrounding whitespace.
+     */
+    private fun findPotentialJsonObjectString(responseText: String): String? {
+        var candidateString = responseText
+
+        // First, check if <tool_call> tags exist and prioritize their content.
+        val tagPattern = Pattern.compile("<tool_call>(.*?)</tool_call>", Pattern.DOTALL)
+        val tagMatcher = tagPattern.matcher(responseText)
+        if (tagMatcher.find()) {
+            // If tags are found, their content becomes our new area to search.
+            candidateString = tagMatcher.group(1) ?: ""
+        }
+
+        // Now, find the boundaries of the JSON object within the candidate string.
+        val firstBraceIndex = candidateString.indexOf('{')
+        val lastBraceIndex = candidateString.lastIndexOf('}')
+
+        // Check if we found both braces in the correct order.
+        if (firstBraceIndex != -1 && lastBraceIndex != -1 && firstBraceIndex < lastBraceIndex) {
+            // Extract the substring from the first '{' to the last '}' inclusive.
+            return candidateString.substring(firstBraceIndex, lastBraceIndex + 1)
+        }
+
+        // If we couldn't find a valid JSON object structure, return null.
+        return null
+    }
+
+
+    /**
+     * Re-usable helper to parse a string representing a single JSON Object into a ToolCall.
+     * (This function does not need to change).
      */
     private fun parseJsonObjectToToolCall(jsonStr: String): ToolCall? {
         return try {
