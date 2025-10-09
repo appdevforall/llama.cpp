@@ -21,6 +21,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.reduce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
@@ -348,41 +349,80 @@ class MainViewModel(
         }
     }
 
-    private fun parseToolCall(text: String): ToolCall? {
+    private fun parseToolCall(responseText: String): ToolCall? {
+        // --- Strategy 1: Look for <tool_call> tags first ---
+        val tagPattern = Pattern.compile("<tool_call>(.*?)</tool_call>", Pattern.DOTALL)
+        val tagMatcher = tagPattern.matcher(responseText)
         val toolCalls = mutableListOf<ToolCall>()
-        // The '?' makes the '*' non-greedy, matching the shortest possible string.
-        val pattern = Pattern.compile("<tool_call>(.*?)</tool_call>", Pattern.DOTALL)
-        val matcher = pattern.matcher(text)
 
-        // Use a while loop to find all occurrences of the pattern
-        while (matcher.find()) {
-            // group(1) contains the string captured by (.*?)
-            val jsonStr = matcher.group(1)?.trim()
-
-            if (jsonStr.isNullOrBlank()) {
-                Log.w("ToolParse", "Found empty <tool_call> tags. Skipping.")
-                continue // Move to the next match
-            }
-
-            try {
-                val json = JSONObject(jsonStr)
-                val toolName = json.getString("tool_name")
-                val argsJson = json.getJSONObject("args")
-
-                val argsMap = mutableMapOf<String, Any>()
-                argsJson.keys().forEach { key ->
-                    argsMap[key] = argsJson.get(key)
-                }
-
-                toolCalls.add(ToolCall(toolName, argsMap))
-
-            } catch (e: JSONException) {
-                Log.e("ToolParse", "Failed to parse tool call JSON: $jsonStr", e)
-                // Continue to the next match even if one fails
+        while (tagMatcher.find()) {
+            val jsonStr = tagMatcher.group(1)?.trim()
+            if (!jsonStr.isNullOrBlank()) {
+                // This helper function (defined below) parses a single JSON object string
+                parseJsonObjectToToolCall(jsonStr)?.let { toolCalls.add(it) }
             }
         }
 
+        // If we found any matches with the tags, we're done.
+        if (toolCalls.isNotEmpty()) {
+            return toolCalls.getOrNull(0)
+        }
+
+        // --- Strategy 2 & 3: No tags found, look for markdown or raw JSON ---
+        var potentialJson = responseText.trim()
+
+        // Look for markdown block ```json ... ``` or ``` ... ```
+        val markdownPattern = Pattern.compile("```(?:json)?\\s*(.*?)\\s*```", Pattern.DOTALL)
+        val markdownMatcher = markdownPattern.matcher(potentialJson)
+
+        if (markdownMatcher.find()) {
+            potentialJson = markdownMatcher.group(1)?.trim() ?: ""
+        }
+
+        // Now, try to parse the extracted string, which might be an object or an array
+        if (potentialJson.isBlank()) {
+            return null
+        }
+
+        try {
+            // Check if it's a JSON array (starts with '[') for multiple tool calls
+            if (potentialJson.startsWith("[")) {
+                val jsonArray = JSONArray(potentialJson)
+                for (i in 0 until jsonArray.length()) {
+                    val jsonObjectStr = jsonArray.getJSONObject(i).toString()
+                    parseJsonObjectToToolCall(jsonObjectStr)?.let { toolCalls.add(it) }
+                }
+            }
+            // Otherwise, assume it's a single JSON object (starts with '{')
+            else if (potentialJson.startsWith("{")) {
+                parseJsonObjectToToolCall(potentialJson)?.let { toolCalls.add(it) }
+            }
+        } catch (e: JSONException) {
+            Log.e("ToolParse", "Failed to parse potential JSON after checking tags.", e)
+        }
+
         return toolCalls.getOrNull(0)
+    }
+
+    /**
+     * Helper function to parse a string representing a single JSON Object into a ToolCall.
+     * @param jsonStr The JSON string to parse.
+     * @return A ToolCall object, or null if parsing fails.
+     */
+    private fun parseJsonObjectToToolCall(jsonStr: String): ToolCall? {
+        return try {
+            val json = JSONObject(jsonStr)
+            val toolName = json.getString("tool_name")
+            val argsJson = json.getJSONObject("args")
+            val argsMap = mutableMapOf<String, Any>()
+            argsJson.keys().forEach { key ->
+                argsMap[key] = argsJson.get(key)
+            }
+            ToolCall(toolName, argsMap)
+        } catch (e: JSONException) {
+            Log.e("ToolParse", "Could not parse individual JSON object to ToolCall: $jsonStr", e)
+            null
+        }
     }
 
     fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1) {
@@ -645,7 +685,7 @@ class MainViewModel(
         val prefs = context.getSharedPreferences("LlamaPrefs", Context.MODE_PRIVATE)
         val savedUriString = prefs.getString(SAVED_MODEL_URI_KEY, null)
         if (savedUriString != null) {
-            _savedModelUri.value = Uri.parse(savedUriString)
+            _savedModelUri.value = savedUriString.toUri()
         }
     }
 
