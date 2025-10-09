@@ -13,8 +13,7 @@ import androidx.core.net.toUri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
+import com.example.llama.Util.parseToolCall
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,24 +23,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.reduce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONException
-import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicLong
-import java.util.regex.Pattern
-
-class MainViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
-    override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
-            @Suppress("UNCHECKED_CAST")
-            return MainViewModel(application, LLamaAndroid.instance()) as T
-        }
-        throw IllegalArgumentException("Unknown ViewModel class")
-    }
-}
-
-private data class ToolCall(val toolName: String, val args: Map<String, Any>)
 
 private const val SYSTEM_PROMPT = """
 You are a helpful and smart assistant integrated into an Android application.
@@ -319,7 +303,7 @@ class MainViewModel(
                 updateLastMessageDuration(durationMs)
                 break
             } else {
-                val toolCall = parseToolCall(finalResponse)
+                val toolCall = parseToolCall(finalResponse, tools.keys)
                 if (toolCall != null) {
                     val toolCallString =
                         "<tool_call>\n" + "{\n" + "  \"tool_name\": \"${toolCall.toolName}\",\n" + "  \"args\": {}\n" + "}\n" + "</tool_call>"
@@ -347,69 +331,6 @@ class MainViewModel(
                 }
             }
             currentTurn++
-        }
-    }
-
-    private fun parseToolCall(responseText: String): ToolCall? {
-        val jsonString = findPotentialJsonObjectString(responseText)
-        if (jsonString != null) {
-            val toolCallFromJson = parseJsonObjectToToolCall(jsonString)
-            if (toolCallFromJson != null) {
-                Log.d("ToolParse", "Successfully parsed tool call from well-formed JSON.")
-                return toolCallFromJson
-            }
-        }
-        Log.w(
-            "ToolParse",
-            "Could not parse JSON. Attempting recovery by searching for tool name..."
-        )
-        val tagContent =
-            responseText.substringAfter("<tool_call>", "").substringBefore("</tool_call>", "")
-                .trim()
-        if (tagContent.isNotBlank()) {
-            for (toolName in tools.keys) {
-                if (tagContent.contains(toolName)) {
-                    Log.d(
-                        "ToolParse",
-                        "RECOVERY SUCCESS: Found tool name '$toolName' in malformed output."
-                    )
-                    return ToolCall(toolName, emptyMap())
-                }
-            }
-        }
-        Log.e(
-            "ToolParse",
-            "RECOVERY FAILED: No valid JSON or known tool name found in the response."
-        )
-        return null
-    }
-
-    private fun findPotentialJsonObjectString(responseText: String): String? {
-        var candidateString = responseText
-        val tagPattern = Pattern.compile("<tool_call>(.*?)</tool_call>", Pattern.DOTALL)
-        val tagMatcher = tagPattern.matcher(responseText)
-        if (tagMatcher.find()) {
-            candidateString = tagMatcher.group(1) ?: ""
-        }
-        val firstBraceIndex = candidateString.indexOf('{')
-        val lastBraceIndex = candidateString.lastIndexOf('}')
-        if (firstBraceIndex != -1 && lastBraceIndex != -1 && firstBraceIndex < lastBraceIndex) {
-            return candidateString.substring(firstBraceIndex, lastBraceIndex + 1)
-        }
-        return null
-    }
-
-    private fun parseJsonObjectToToolCall(jsonStr: String): ToolCall? {
-        return try {
-            val json = JSONObject(jsonStr)
-            val toolName = json.getString("tool_name")
-            val argsJson = json.getJSONObject("args")
-            val argsMap = mutableMapOf<String, Any>()
-            argsJson.keys().forEach { key -> argsMap[key] = argsJson.get(key) }
-            ToolCall(toolName, argsMap)
-        } catch (e: JSONException) {
-            Log.e("ToolParse", "Could not parse individual JSON object to ToolCall: $jsonStr", e)
-            null
         }
     }
 

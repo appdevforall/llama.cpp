@@ -5,6 +5,7 @@ import android.llama.cpp.LLamaAndroid
 import androidx.arch.core.executor.testing.InstantTaskExecutorRule
 import com.example.llama.util.MainCoroutineRule
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -118,5 +119,38 @@ class MainViewModelTest {
         assertTrue(
             "Error message '$errorMessage' not found in UI messages",
             messages.any { it.text == errorMessage })
+    }
+
+    @Test
+    fun `send with simple inference updates message correctly`() = runTest {
+        // Arrange
+        val userMessage = "Tell me a joke"
+        val modelResponseChunks =
+            listOf("Why ", "did ", "the ", "scarecrow ", "win ", "an ", "award?")
+        val expectedFullResponse = "Why did the scarecrow win an award?"
+
+        viewModel.setToolUse(false) // This is key to forcing the runSimpleInference path
+        viewModel.updateMessage(userMessage)
+
+        // Mock the single-argument send method used by runSimpleInference
+        // We need to import kotlinx.coroutines.flow.asFlow
+        whenever(mockLlamaAndroid.send(userMessage)) doReturn modelResponseChunks.asFlow()
+
+        // Act
+        viewModel.send()
+        mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle()
+
+        // Assert
+        val finalMessages = viewModel.uiMessages.value!!
+        val lastMessage = finalMessages.last()
+
+        assertEquals(
+            "The final message text should match the fully streamed response",
+            expectedFullResponse, lastMessage.text
+        )
+        assertEquals(MessageType.MODEL, lastMessage.type)
+
+        // Verify that the correct, single-argument send method was called.
+        verify(mockLlamaAndroid).send(userMessage)
     }
 }
