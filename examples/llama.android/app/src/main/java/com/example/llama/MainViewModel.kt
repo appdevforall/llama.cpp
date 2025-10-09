@@ -71,7 +71,9 @@ enum class MessageType {
 data class UiMessage(
     val id: Long,
     val text: String,
-    val type: MessageType
+    val type: MessageType,
+    val timestamp: Long = System.currentTimeMillis(),
+    val durationMs: Long? = null
 )
 
 sealed interface DownloadUiState {
@@ -247,8 +249,21 @@ class MainViewModel(
         }
     }
 
+    private fun updateLastMessageDuration(durationMs: Long) {
+        if (conversation.isNotEmpty()) {
+            val lastMessage = conversation.last()
+            // Ensure we're updating a model message
+            if (lastMessage.type == MessageType.MODEL) {
+                val updatedMessage = lastMessage.copy(durationMs = durationMs)
+                conversation = conversation.dropLast(1) + updatedMessage
+                _uiMessages.postValue(conversation)
+            }
+        }
+    }
+
     private suspend fun runSimpleInference(prompt: String) {
         Log.d("SimpleInference", "Running simple inference with prompt: \"$prompt\"")
+        val startTime = System.nanoTime()
         try {
             withContext(Dispatchers.IO) {
                 if (isStreamingEnabled) {
@@ -263,6 +278,8 @@ class MainViewModel(
                     updateLastMessage(modelResponse)
                 }
             }
+            val durationMs = (System.nanoTime() - startTime) / 1_000_000
+            updateLastMessageDuration(durationMs)
             Log.d("SimpleInference", "Simple inference complete.")
         } catch (e: Exception) {
             val errorMsg = "Error: Could not get a response from the model."
@@ -292,6 +309,7 @@ class MainViewModel(
             val fullPromptHistory = buildPromptWithHistory(conversation)
             Log.d("AgentDebug", "Final Prompt Sent:\n$fullPromptHistory")
 
+            val startTime = System.nanoTime()
             val modelResponse = try {
                 llamaAndroid.clearKvCache()
                 withContext(Dispatchers.IO) {
@@ -302,19 +320,17 @@ class MainViewModel(
                 Log.e("AgentLoop", "Model inference failed", e)
                 "Error: Could not get a response from the model."
             }
+            val durationMs = (System.nanoTime() - startTime) / 1_000_000
 
             // Clean the response by taking everything before the first stop string.
             val finalResponse = modelResponse.split(stopStrings.first()).first()
             Log.d("AgentDebug", "Raw Model Result: \"$modelResponse\"")
             Log.d("AgentDebug", "Trimmed Final Result: \"$finalResponse\"")
 
-            // *** LOGIC CHANGE IS HERE ***
             if (isFinalAnswerTurn) {
-                // --- THIS IS THE FINAL ANSWER ---
-                // We are in the "Final Answer State". Do NOT look for another tool call.
-                // The model's response is the answer for the user.
                 updateLastMessage(finalResponse)
                 Log.d("AgentDebug", "Final answer received. Concluding.")
+                updateLastMessageDuration(durationMs)
                 break // Exit the loop successfully.
 
             } else {
@@ -331,6 +347,7 @@ class MainViewModel(
                         "}\n" +
                         "</tool_call>"
 
+                    updateLastMessageDuration(durationMs)
                     updateLastMessage(toolCallString) // Show the tool call in the UI
                     Log.d("AgentDebug", "Tool Call Detected: $toolCall")
 
@@ -348,9 +365,8 @@ class MainViewModel(
                         break // Exit loop on error
                     }
                 } else {
-                    // --- NO TOOL CALL FOUND (Direct Answer) ---
-                    // The model decided to answer directly without using a tool.
                     updateLastMessage(finalResponse)
+                    updateLastMessageDuration(durationMs)
                     Log.d("AgentDebug", "No tool call detected. Model gave a direct answer.")
                     break // Exit the loop
                 }

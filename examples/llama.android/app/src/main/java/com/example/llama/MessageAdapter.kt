@@ -10,6 +10,9 @@ import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import io.noties.markwon.Markwon
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 private const val VIEW_TYPE_SYSTEM = 0
 private const val VIEW_TYPE_USER = 1
@@ -19,30 +22,57 @@ class MessageAdapter(context: Context) :
     ListAdapter<UiMessage, MessageAdapter.MessageViewHolder>(MessageDiffCallback()) {
 
     private val markwon = Markwon.create(context)
+    private val timeFormatter = SimpleDateFormat("h:mm a", Locale.getDefault())
 
     sealed class MessageViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-        abstract fun bind(message: UiMessage, markwon: Markwon)
+        abstract fun bind(message: UiMessage, markwon: Markwon, timeFormatter: SimpleDateFormat)
 
         class SystemMessageViewHolder(view: View) : MessageViewHolder(view) {
             private val textView: TextView = view.findViewById(R.id.messageTextView)
-            override fun bind(message: UiMessage, markwon: Markwon) {
+            private val timestampTextView: TextView = view.findViewById(R.id.timestampTextView)
+            override fun bind(
+                message: UiMessage,
+                markwon: Markwon,
+                timeFormatter: SimpleDateFormat
+            ) {
                 textView.text = message.text
+                timestampTextView.text = timeFormatter.format(Date(message.timestamp))
             }
         }
 
         class UserMessageViewHolder(view: View) : MessageViewHolder(view) {
             private val textView: TextView = view.findViewById(R.id.messageTextView)
-            override fun bind(message: UiMessage, markwon: Markwon) {
+            private val timestampTextView: TextView = view.findViewById(R.id.timestampTextView)
+            override fun bind(
+                message: UiMessage,
+                markwon: Markwon,
+                timeFormatter: SimpleDateFormat
+            ) {
                 textView.text = message.text
+                timestampTextView.text = timeFormatter.format(Date(message.timestamp))
             }
         }
 
         class ModelMessageViewHolder(view: View) : MessageViewHolder(view) {
             private val textView: TextView = view.findViewById(R.id.messageTextView)
-            override fun bind(message: UiMessage, markwon: Markwon) {
+            private val timestampTextView: TextView = view.findViewById(R.id.timestampTextView)
+            private val durationTextView: TextView = view.findViewById(R.id.durationTextView)
+            override fun bind(
+                message: UiMessage,
+                markwon: Markwon,
+                timeFormatter: SimpleDateFormat
+            ) {
                 markwon.setMarkdown(textView, message.text)
-
                 textView.movementMethod = LinkMovementMethod.getInstance()
+                timestampTextView.text = timeFormatter.format(Date(message.timestamp))
+
+                if (message.durationMs != null) {
+                    val seconds = message.durationMs / 1000.0
+                    durationTextView.text = String.format(Locale.US, "(%.2fs)", seconds)
+                    durationTextView.visibility = View.VISIBLE
+                } else {
+                    durationTextView.visibility = View.GONE
+                }
             }
         }
     }
@@ -76,7 +106,7 @@ class MessageAdapter(context: Context) :
     }
 
     override fun onBindViewHolder(holder: MessageViewHolder, position: Int) {
-        holder.bind(getItem(position), markwon)
+        holder.bind(getItem(position), markwon, timeFormatter)
     }
 
     class MessageDiffCallback : DiffUtil.ItemCallback<UiMessage>() {
@@ -85,7 +115,7 @@ class MessageAdapter(context: Context) :
         }
 
         override fun areContentsTheSame(oldItem: UiMessage, newItem: UiMessage): Boolean {
-            return oldItem.text == newItem.text && oldItem.type == newItem.type
+            return oldItem == newItem
         }
     }
 }

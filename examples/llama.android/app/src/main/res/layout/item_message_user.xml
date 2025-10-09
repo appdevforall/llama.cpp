@@ -20,4 +20,14 @@
         app:layout_constraintWidth_percent="0.8"
         tools:text="This is a message from the user. It is right aligned." />
 
+    <TextView
+        android:id="@+id/timestampTextView"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:alpha="0.7"
+        android:textAppearance="?attr/textAppearanceCaption"
+        app:layout_constraintEnd_toEndOf="@id/messageTextView"
+        app:layout_constraintTop_toBottomOf="@id/messageTextView"
+        tools:text="11:16 AM" />
 </androidx.constraintlayout.widget.ConstraintLayout>
