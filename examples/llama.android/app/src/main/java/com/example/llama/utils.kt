@@ -16,16 +16,13 @@ object Util {
                 return toolCallFromJson
             }
         }
-        Log.w(
-            "ToolParse",
-            "Could not parse JSON. Attempting recovery by searching for tool name..."
-        )
+
+        // Recovery logic for malformed JSON
         val tagContent =
-            responseText.substringAfter("<tool_call>", "").substringBefore("</tool_call>", "")
-                .trim()
+            responseText.substringAfter("<tool_call>", "").substringBefore("</tool_call>").trim()
         if (tagContent.isNotBlank()) {
             for (toolName in toolKeys) {
-                if (tagContent.contains(toolName)) {
+                if (tagContent.contains("\"$toolName\"")) { // Be more specific to avoid accidental matches
                     Log.d(
                         "ToolParse",
                         "RECOVERY SUCCESS: Found tool name '$toolName' in malformed output."
@@ -34,19 +31,18 @@ object Util {
                 }
             }
         }
-        Log.e(
-            "ToolParse",
-            "RECOVERY FAILED: No valid JSON or known tool name found in the response."
-        )
+
+        Log.e("ToolParse", "RECOVERY FAILED: No valid JSON or known tool name found in response.")
         return null
     }
 
     private fun findPotentialJsonObjectString(responseText: String): String? {
-        var candidateString = responseText
         val tagPattern = Pattern.compile("<tool_call>(.*?)</tool_call>", Pattern.DOTALL)
         val tagMatcher = tagPattern.matcher(responseText)
-        if (tagMatcher.find()) {
-            candidateString = tagMatcher.group(1) ?: ""
+        val candidateString = if (tagMatcher.find()) {
+            tagMatcher.group(1) ?: ""
+        } else {
+            responseText
         }
         val firstBraceIndex = candidateString.indexOf('{')
         val lastBraceIndex = candidateString.lastIndexOf('}')
@@ -59,13 +55,16 @@ object Util {
     private fun parseJsonObjectToToolCall(jsonStr: String): ToolCall? {
         return try {
             val json = JSONObject(jsonStr)
-            val toolName = json.optString("tool_name", "")
+            val toolName = json.optString("tool_name", "") ?: return null
             if (toolName.isBlank()) {
                 return null
             }
             val argsJson = json.optJSONObject("args")
             val argsMap = mutableMapOf<String, Any>()
 
+            // This 'let' block is the critical fix. It creates a non-nullable 'nonNullArgs'
+            // variable, which prevents the NullPointerException. Your current code
+            // is likely missing this, causing the crash.
             argsJson?.let { nonNullArgs ->
                 nonNullArgs.keys().forEach { key ->
                     if (nonNullArgs.has(key) && !nonNullArgs.isNull(key)) {

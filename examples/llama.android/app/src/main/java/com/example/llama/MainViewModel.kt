@@ -296,45 +296,33 @@ class MainViewModel(
             val finalResponse = modelResponse.split(stopStrings.first()).first()
             Log.d("AgentDebug", "Raw Model Result: \"$modelResponse\"")
             Log.d("AgentDebug", "Trimmed Final Result: \"$finalResponse\"")
+
             if (isFinalAnswerTurn) {
                 updateLastMessage(finalResponse)
-                Log.d("AgentDebug", "Final answer received. Concluding.")
                 updateLastMessageDuration(durationMs)
                 break
             } else {
-                try {
-                    val toolCall = parseToolCall(finalResponse, tools.keys)
-                    if (toolCall != null) {
-                        val toolCallString =
-                            "<tool_call>\n" + "{\n" + "  \"tool_name\": \"${toolCall.toolName}\",\n" + "  \"args\": {}\n" + "}\n" + "</tool_call>"
-                        updateLastMessageDuration(durationMs)
-                        updateLastMessage(toolCallString)
-                        Log.d("AgentDebug", "Tool Call Detected: $toolCall")
-                        val tool = tools[toolCall.toolName]
-                        if (tool != null) {
-                            val result = tool.execute(getApplication(), toolCall.args)
-                            Log.d("AgentDebug", "Tool Response: \"$result\"")
-                            addMessage(result, MessageType.TOOL_RESULT)
-                            addMessage("", MessageType.MODEL)
-                        } else {
-                            val errorMsg =
-                                "Error: Model tried to call unknown tool '${toolCall.toolName}'"
-                            updateLastMessage(errorMsg)
-                            Log.e("AgentDebug", errorMsg)
-                            break
-                        }
+                val toolCall = parseToolCall(finalResponse, tools.keys)
+                if (toolCall != null) {
+                    val toolCallString =
+                        "<tool_call>\n" + "{\n" + "  \"tool_name\": \"${toolCall.toolName}\",\n" + "  \"args\": {}\n" + "}\n" + "</tool_call>"
+                    updateLastMessageDuration(durationMs)
+                    updateLastMessage(toolCallString)
+                    val tool = tools[toolCall.toolName]
+                    if (tool != null) {
+                        val result = tool.execute(getApplication(), toolCall.args)
+                        addMessage(result, MessageType.TOOL_RESULT)
+                        addMessage("", MessageType.MODEL)
                     } else {
-                        updateLastMessage(finalResponse)
-                        updateLastMessageDuration(durationMs)
-                        Log.d("AgentDebug", "No tool call detected. Model gave a direct answer.")
+                        val errorMsg =
+                            "Error: Model tried to call unknown tool '${toolCall.toolName}'"
+                        updateLastMessage(errorMsg)
                         break
                     }
-                } catch (t: Throwable) {
-                    // This block will catch the crash and tell us exactly what it is.
-                    Log.e("VIEWMODEL_CRASH", "Critical error in runAgentLoop!", t)
-                    // We update the UI with a specific message to see it in the test.
-                    updateLastMessage("CRASHED: ${t.javaClass.simpleName}")
-                    break // Exit the loop after a crash
+                } else {
+                    updateLastMessage(finalResponse)
+                    updateLastMessageDuration(durationMs)
+                    break
                 }
             }
             currentTurn++
