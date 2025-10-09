@@ -251,8 +251,8 @@ class ChatRepository(
     private fun detectModelFamily(path: String): ModelFamily {
         val lowerPath = path.lowercase()
         return when {
-            lowerPath.contains("gemma-2") -> ModelFamily.GEMMA2
-            lowerPath.contains("llama-3") -> ModelFamily.LLAMA3
+            lowerPath.contains("gemma") -> ModelFamily.GEMMA2
+            lowerPath.contains("llama") -> ModelFamily.LLAMA3
             else -> ModelFamily.UNKNOWN
         }
     }
