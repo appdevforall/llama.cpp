@@ -16,6 +16,7 @@ import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.reduce
@@ -32,7 +33,13 @@ class MainViewModelFactory(private val application: Application) : ViewModelProv
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return MainViewModel(application, LLamaAndroid.instance()) as T
+            // Pass default dispatchers for production code
+            return MainViewModel(
+                application,
+                LLamaAndroid.instance(),
+                Dispatchers.Main,
+                Dispatchers.IO
+            ) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }
@@ -88,7 +95,10 @@ enum class ModelFamily {
 
 class MainViewModel(
     application: Application,
-    private val llamaAndroid: LLamaAndroid = LLamaAndroid.instance()
+    private val llamaAndroid: LLamaAndroid = LLamaAndroid.instance(),
+    // Add dispatchers to the constructor
+    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : AndroidViewModel(application) {
     private val messageIdCounter = AtomicLong(0)
     private val _contextSize = MutableLiveData(0)
@@ -167,7 +177,7 @@ class MainViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        viewModelScope.launch {
+        viewModelScope.launch(mainDispatcher) {
             try {
                 llamaAndroid.unload()
             } catch (exc: IllegalStateException) {
@@ -202,9 +212,9 @@ class MainViewModel(
     }
 
     fun loadModelFromUri(uri: Uri, context: Context) {
-        viewModelScope.launch {
+        viewModelScope.launch(mainDispatcher) {
             try {
-                val destinationFile = withContext(Dispatchers.IO) {
+                val destinationFile = withContext(ioDispatcher) {
                     val fileName = getFileName(context, uri)
                     val dest = File(context.cacheDir, fileName)
                     context.contentResolver.openInputStream(uri)?.use { inputStream ->
@@ -237,7 +247,7 @@ class MainViewModel(
         val placeholder = if (isStreamingEnabled) "" else "..."
         addMessage(placeholder, MessageType.MODEL)
 
-        viewModelScope.launch {
+        viewModelScope.launch(mainDispatcher) {
             llamaAndroid.clearKvCache()
             if (isToolUseEnabled) {
                 runAgentLoop()
@@ -262,7 +272,7 @@ class MainViewModel(
         Log.d("SimpleInference", "Running simple inference with prompt: \"$prompt\"")
         val startTime = System.nanoTime()
         try {
-            withContext(Dispatchers.IO) {
+            withContext(ioDispatcher) {
                 if (isStreamingEnabled) {
                     var currentText = ""
                     llamaAndroid.send(prompt).collect { responseChunk ->
@@ -307,7 +317,7 @@ class MainViewModel(
             val startTime = System.nanoTime()
             val modelResponse = try {
                 llamaAndroid.clearKvCache()
-                withContext(Dispatchers.IO) {
+                withContext(ioDispatcher) {
                     llamaAndroid.send(fullPromptHistory, stop = stopStrings)
                         .reduce { acc, s -> acc + s }
                 }
@@ -441,7 +451,7 @@ class MainViewModel(
     }
 
     fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1) {
-        viewModelScope.launch {
+        viewModelScope.launch(mainDispatcher) {
             try {
                 val start = System.nanoTime()
                 val warmupResult = llamaAndroid.bench(pp, tg, pl, nr)
@@ -466,12 +476,12 @@ class MainViewModel(
     }
 
     fun load(pathToModel: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(mainDispatcher) {
             try {
                 currentModelFamily = detectModelFamily(pathToModel)
                 log("Detected model family: $currentModelFamily")
 
-                withContext(Dispatchers.IO) {
+                withContext(ioDispatcher) {
                     llamaAndroid.load(pathToModel)
                 }
                 log("Loaded $pathToModel")
