@@ -52,6 +52,7 @@ class MessageAdapter(context: Context) :
             MessageType.SYSTEM -> VIEW_TYPE_SYSTEM
             MessageType.USER -> VIEW_TYPE_USER
             MessageType.MODEL -> VIEW_TYPE_MODEL
+            MessageType.TOOL_RESULT -> VIEW_TYPE_SYSTEM
         }
     }
 

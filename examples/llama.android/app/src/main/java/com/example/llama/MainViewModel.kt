@@ -65,7 +65,7 @@ After the tool is called, you will receive the result and you must use it to ans
 """
 
 enum class MessageType {
-    SYSTEM, USER, MODEL
+    SYSTEM, USER, MODEL, TOOL_RESULT
 }
 
 data class UiMessage(
@@ -319,7 +319,7 @@ class MainViewModel(
                     Log.d("AgentDebug", "Tool Response: \"$result\"")
 
                     // 3. Add the SYSTEM message with the tool result
-                    addMessage(result, MessageType.SYSTEM)
+                    addMessage(result, MessageType.TOOL_RESULT)
 
                     // 4. IMPORTANT: Add a NEW placeholder for the final answer
                     addMessage("", MessageType.MODEL)
@@ -501,41 +501,60 @@ class MainViewModel(
     }
 
     private fun buildGemma2Prompt(history: List<UiMessage>): String {
-        val historyBuilder = StringBuilder()
+        val promptBuilder = StringBuilder()
 
-        // --- FINAL CORRECTED PROMPT STRATEGY ---
+        // --- 1. System Preamble: Define the role, rules, and tools ---
+        // Use a structured JSON format for tool definitions, as it's less ambiguous for the model.
+        val toolsAsJsonArray =
+            tools.values.joinToString(prefix = "[", postfix = "]", separator = ",\n") { tool ->
+                """  {
+        |    "tool_name": "${tool.name}",
+        |    "description": "${tool.description.replace("\"", "\\\"")}",
+        |    "args": {}
+        |  }""".trimMargin()
+                // Note: `argumentsAsJsonSchema` is a placeholder for a function that returns
+                // a JSON string like "{ \"city\": \"The name of the city.\" }"
+            }
 
-        // 1. System-level instructions are a preamble, outside any "turn".
-        historyBuilder.append("You are a helpful assistant. You have access to the following tools:\n")
-        val toolDescriptions =
-            tools.values.joinToString("\n") { "- `${it.name}`: ${it.description}" }
-        historyBuilder.append(toolDescriptions)
-        historyBuilder.append("\n\nTo use a tool, respond with a JSON object inside a <tool_call> tag. Example:\n")
-        historyBuilder.append("<tool_call>\n{\n  \"tool_name\": \"get_current_datetime\",\n  \"args\": {}\n}\n</tool_call>\n\n")
-        historyBuilder.append("Do not add any other text or formatting like ```json markdown.\n\n")
+        promptBuilder.append("You are a helpful assistant. To answer the user's question, you can either respond directly or use one of the following tools.\n\n")
+        promptBuilder.append("### AVAILABLE TOOLS\n")
+        promptBuilder.append(toolsAsJsonArray)
+        promptBuilder.append("\n\n")
+        promptBuilder.append("### RESPONSE FORMAT\n")
+        promptBuilder.append("To use a tool, you must respond ONLY with a single <tool_call> XML tag containing a valid JSON object. Do not add any other text, reasoning, or markdown formatting.\n")
+        promptBuilder.append("Example:\n")
+        promptBuilder.append("<tool_call>\n{\n  \"tool_name\": \"get_current_datetime\",\n  \"args\": {}\n}\n</tool_call>\n\n")
 
-        // 2. Build the ENTIRE chat history using the model's turn tokens.
-        // This loop now correctly processes every message in order.
+        promptBuilder.append("### EXAMPLE CONVERSATION\n")
+        promptBuilder.append("<start_of_turn>user\nWhat is the battery level?<end_of_turn>\n")
+        promptBuilder.append("<start_of_turn>model\n<tool_call>\n{\n  \"tool_name\": \"get_device_battery\",\n  \"args\": {}\n}\n</tool_call><end_of_turn>\n\n")
+
+        // --- 2. Build the conversation history with correct turn structure ---
         history.forEach { message ->
             when (message.type) {
                 MessageType.USER -> {
-                    historyBuilder.append("<start_of_turn>user\n${message.text}<end_of_turn>\n")
+                    promptBuilder.append("<start_of_turn>user\n${message.text}<end_of_turn>\n")
                 }
                 MessageType.MODEL -> {
-                    // Don't append empty placeholders from the UI
+                    // We append model messages, which could be a conversational response or a tool call.
                     if (message.text.isNotBlank()) {
-                        historyBuilder.append("<start_of_turn>model\n${message.text}<end_of_turn>\n")
+                        promptBuilder.append("<start_of_turn>model\n${message.text}<end_of_turn>\n")
                     }
                 }
-                // Skip system messages (tool results) for this prompt style
                 MessageType.SYSTEM -> {}
+                // CRITICAL: Handle the output from a tool call and feed it back to the model.
+                MessageType.TOOL_RESULT -> {
+                    promptBuilder.append("<start_of_turn>tool\n") // Use the official 'tool' role for Gemma
+                    promptBuilder.append(message.text) // This should be the data returned by your tool, often as JSON
+                    promptBuilder.append("<end_of_turn>\n")
+                }
             }
         }
 
-        // 3. Prompt the model for its response.
-        historyBuilder.append("<start_of_turn>model\n")
+        // --- 3. Prompt the model for its next response ---
+        promptBuilder.append("<start_of_turn>model\n")
 
-        return historyBuilder.toString()
+        return promptBuilder.toString()
     }
 
     private fun buildLlama3Prompt(history: List<UiMessage>): String {
@@ -558,6 +577,11 @@ class MainViewModel(
                 }
                 // There are no SYSTEM messages in the initial turn for Llama 3.
                 MessageType.SYSTEM -> {}
+                MessageType.TOOL_RESULT -> {
+                    historyBuilder.append("<|start_header_id|>tool<|end_header_id|>\n") // Use the official 'tool' role for Gemma
+                    historyBuilder.append(message.text) // This should be the data returned by your tool, often as JSON
+                    historyBuilder.append("<|eot_id|>\n")
+                }
             }
         }
 
