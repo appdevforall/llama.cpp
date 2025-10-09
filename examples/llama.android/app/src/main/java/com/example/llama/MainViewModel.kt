@@ -19,6 +19,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.reduce
 import kotlinx.coroutines.launch
@@ -34,13 +35,7 @@ class MainViewModelFactory(private val application: Application) : ViewModelProv
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            // Pass default dispatchers for production code
-            return MainViewModel(
-                application,
-                LLamaAndroid.instance(),
-                Dispatchers.Main,
-                Dispatchers.IO
-            ) as T
+            return MainViewModel(application, LLamaAndroid.instance()) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }
@@ -97,8 +92,7 @@ enum class ModelFamily {
 class MainViewModel(
     application: Application,
     private val llamaAndroid: LLamaAndroid = LLamaAndroid.instance(),
-    // Add dispatchers to the constructor
-    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+    mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : AndroidViewModel(application) {
 
@@ -113,7 +107,6 @@ class MainViewModel(
     ).associateBy { it.name }
 
     private var currentModelFamily: ModelFamily = ModelFamily.UNKNOWN
-
     var conversation = listOf<UiMessage>()
 
     private val _uiMessages = MutableLiveData<List<UiMessage>>(
@@ -133,14 +126,6 @@ class MainViewModel(
     var isToolUseEnabled = true
         private set
 
-    fun setStreaming(isEnabled: Boolean) {
-        isStreamingEnabled = isEnabled
-    }
-
-    fun setToolUse(isEnabled: Boolean) {
-        isToolUseEnabled = isEnabled
-    }
-
     private val masterSystemPrompt: String by lazy {
         val toolDescriptions = tools.values.joinToString("\n") { "- ${it.name}: ${it.description}" }
         SYSTEM_PROMPT.replace("[AVAILABLE_TOOLS]", toolDescriptions)
@@ -152,7 +137,6 @@ class MainViewModel(
     private val _modelStates = MutableLiveData<Map<String, DownloadUiState>>(emptyMap())
     val modelStates: LiveData<Map<String, DownloadUiState>> get() = _modelStates
 
-
     companion object {
         @JvmStatic
         private val NanosPerSecond = 1_000_000_000.0
@@ -160,8 +144,15 @@ class MainViewModel(
     }
 
     private val tag: String? = this::class.simpleName
-
     var message: String = ""
+
+    fun setStreaming(isEnabled: Boolean) {
+        isStreamingEnabled = isEnabled
+    }
+
+    fun setToolUse(isEnabled: Boolean) {
+        isToolUseEnabled = isEnabled
+    }
 
     private fun addMessage(text: String, type: MessageType) {
         val message = UiMessage(messageIdCounter.getAndIncrement(), text, type)
@@ -178,10 +169,10 @@ class MainViewModel(
         _modelStates.value = initialState
     }
 
-
     override fun onCleared() {
         super.onCleared()
-        customScope.launch(mainDispatcher) {
+        customScope.cancel()
+        customScope.launch {
             try {
                 llamaAndroid.unload()
             } catch (exc: IllegalStateException) {
@@ -216,7 +207,7 @@ class MainViewModel(
     }
 
     fun loadModelFromUri(uri: Uri, context: Context) {
-        customScope.launch(mainDispatcher) {
+        customScope.launch {
             try {
                 val destinationFile = withContext(ioDispatcher) {
                     val fileName = getFileName(context, uri)
@@ -230,7 +221,6 @@ class MainViewModel(
                 }
                 log("Model copied to cache. Loading...")
                 load(destinationFile.path)
-
             } catch (e: Exception) {
                 Log.e(tag, "Failed to load model from URI", e)
                 log("Error loading model from file: ${e.message}")
@@ -242,16 +232,12 @@ class MainViewModel(
         val text = message
         if (text.isBlank()) return
         message = ""
-
         Log.d("ViewModelSend", "--- NEW REQUEST ---")
         Log.d("ViewModelSend", "User Input: \"$text\"")
-
         addMessage(text, MessageType.USER)
-
         val placeholder = if (isStreamingEnabled) "" else "..."
         addMessage(placeholder, MessageType.MODEL)
-
-        customScope.launch(mainDispatcher) {
+        customScope.launch {
             llamaAndroid.clearKvCache()
             if (isToolUseEnabled) {
                 runAgentLoop()
@@ -284,8 +270,7 @@ class MainViewModel(
                         updateLastMessage(currentText)
                     }
                 } else {
-                    val modelResponse = llamaAndroid.send(prompt)
-                        .reduce { acc, s -> acc + s }
+                    val modelResponse = llamaAndroid.send(prompt).reduce { acc, s -> acc + s }
                     updateLastMessage(modelResponse)
                 }
             }
@@ -301,23 +286,17 @@ class MainViewModel(
 
     private suspend fun runAgentLoop(maxTurns: Int = 5) {
         var currentTurn = 0
-
         while (currentTurn < maxTurns) {
             Log.d("AgentDebug", "--- [Step ${currentTurn + 1}] ---")
-
-            // Determine if this turn is for generating the final answer
             val isFinalAnswerTurn =
                 conversation.getOrNull(conversation.size - 2)?.type == MessageType.TOOL_RESULT
-
             val stopStrings = if (isFinalAnswerTurn) {
                 listOf("<end_of_turn>")
             } else {
                 listOf("</tool_call>")
             }
-
             val fullPromptHistory = buildPromptWithHistory(conversation)
             Log.d("AgentDebug", "Final Prompt Sent:\n$fullPromptHistory")
-
             val startTime = System.nanoTime()
             val modelResponse = try {
                 llamaAndroid.clearKvCache()
@@ -330,39 +309,28 @@ class MainViewModel(
                 "Error: Could not get a response from the model."
             }
             val durationMs = (System.nanoTime() - startTime) / 1_000_000
-
             val finalResponse = modelResponse.split(stopStrings.first()).first()
             Log.d("AgentDebug", "Raw Model Result: \"$modelResponse\"")
             Log.d("AgentDebug", "Trimmed Final Result: \"$finalResponse\"")
-
             if (isFinalAnswerTurn) {
                 updateLastMessage(finalResponse)
                 Log.d("AgentDebug", "Final answer received. Concluding.")
                 updateLastMessageDuration(durationMs)
                 break
-
             } else {
                 val toolCall = parseToolCall(finalResponse)
-
                 if (toolCall != null) {
-                    // A tool call was found, as expected.
-                    val toolCallString = "<tool_call>\n" +
-                        "{\n" +
-                        "  \"tool_name\": \"${toolCall.toolName}\",\n" +
-                        "  \"args\": {}\n" +
-                        "}\n" +
-                        "</tool_call>"
-
+                    val toolCallString =
+                        "<tool_call>\n" + "{\n" + "  \"tool_name\": \"${toolCall.toolName}\",\n" + "  \"args\": {}\n" + "}\n" + "</tool_call>"
                     updateLastMessageDuration(durationMs)
-                    updateLastMessage(toolCallString) // Show the tool call in the UI
+                    updateLastMessage(toolCallString)
                     Log.d("AgentDebug", "Tool Call Detected: $toolCall")
-
                     val tool = tools[toolCall.toolName]
                     if (tool != null) {
                         val result = tool.execute(getApplication(), toolCall.args)
                         Log.d("AgentDebug", "Tool Response: \"$result\"")
                         addMessage(result, MessageType.TOOL_RESULT)
-                        addMessage("", MessageType.MODEL) // Add placeholder for the final answer
+                        addMessage("", MessageType.MODEL)
                     } else {
                         val errorMsg =
                             "Error: Model tried to call unknown tool '${toolCall.toolName}'"
@@ -390,15 +358,13 @@ class MainViewModel(
                 return toolCallFromJson
             }
         }
-
         Log.w(
             "ToolParse",
             "Could not parse JSON. Attempting recovery by searching for tool name..."
         )
-
-        val tagContent = responseText.substringAfter("<tool_call>", "")
-            .substringBefore("</tool_call>", "").trim()
-
+        val tagContent =
+            responseText.substringAfter("<tool_call>", "").substringBefore("</tool_call>", "")
+                .trim()
         if (tagContent.isNotBlank()) {
             for (toolName in tools.keys) {
                 if (tagContent.contains(toolName)) {
@@ -410,7 +376,6 @@ class MainViewModel(
                 }
             }
         }
-
         Log.e(
             "ToolParse",
             "RECOVERY FAILED: No valid JSON or known tool name found in the response."
@@ -420,21 +385,16 @@ class MainViewModel(
 
     private fun findPotentialJsonObjectString(responseText: String): String? {
         var candidateString = responseText
-
         val tagPattern = Pattern.compile("<tool_call>(.*?)</tool_call>", Pattern.DOTALL)
         val tagMatcher = tagPattern.matcher(responseText)
         if (tagMatcher.find()) {
             candidateString = tagMatcher.group(1) ?: ""
         }
-
-        // Now, find the boundaries of the JSON object within the candidate string.
         val firstBraceIndex = candidateString.indexOf('{')
         val lastBraceIndex = candidateString.lastIndexOf('}')
-
         if (firstBraceIndex != -1 && lastBraceIndex != -1 && firstBraceIndex < lastBraceIndex) {
             return candidateString.substring(firstBraceIndex, lastBraceIndex + 1)
         }
-
         return null
     }
 
@@ -444,9 +404,7 @@ class MainViewModel(
             val toolName = json.getString("tool_name")
             val argsJson = json.getJSONObject("args")
             val argsMap = mutableMapOf<String, Any>()
-            argsJson.keys().forEach { key ->
-                argsMap[key] = argsJson.get(key)
-            }
+            argsJson.keys().forEach { key -> argsMap[key] = argsJson.get(key) }
             ToolCall(toolName, argsMap)
         } catch (e: JSONException) {
             Log.e("ToolParse", "Could not parse individual JSON object to ToolCall: $jsonStr", e)
@@ -455,22 +413,18 @@ class MainViewModel(
     }
 
     fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1) {
-        customScope.launch(mainDispatcher) {
+        customScope.launch {
             try {
                 val start = System.nanoTime()
                 val warmupResult = llamaAndroid.bench(pp, tg, pl, nr)
                 val end = System.nanoTime()
-
                 addMessage(warmupResult, MessageType.MODEL)
-
                 val warmup = (end - start).toDouble() / NanosPerSecond
                 addMessage("Warm up time: $warmup seconds, please wait...", MessageType.SYSTEM)
-
                 if (warmup > 5.0) {
                     addMessage("Warm up took too long, aborting benchmark", MessageType.SYSTEM)
                     return@launch
                 }
-
                 addMessage(llamaAndroid.bench(512, 128, 1, 3), MessageType.SYSTEM)
             } catch (exc: IllegalStateException) {
                 Log.e(tag, "bench() failed", exc)
@@ -480,11 +434,10 @@ class MainViewModel(
     }
 
     fun load(pathToModel: String) {
-        customScope.launch(mainDispatcher) {
+        customScope.launch {
             try {
                 currentModelFamily = detectModelFamily(pathToModel)
                 log("Detected model family: $currentModelFamily")
-
                 withContext(ioDispatcher) {
                     llamaAndroid.load(pathToModel)
                 }
@@ -525,12 +478,10 @@ class MainViewModel(
     fun updateMessage(newMessage: String) {
         message = newMessage
     }
-
     fun clear() {
         conversation = listOf()
         _uiMessages.value = listOf()
     }
-
     fun log(message: String) {
         addMessage(message, MessageType.SYSTEM)
     }
@@ -544,7 +495,6 @@ class MainViewModel(
 
     private fun buildGemma2Prompt(history: List<UiMessage>): String {
         val promptBuilder = StringBuilder()
-
         val toolsAsJsonArray =
             tools.values.joinToString(prefix = "[\n", postfix = "\n]", separator = ",\n") { tool ->
                 """  {
@@ -553,18 +503,14 @@ class MainViewModel(
     |    "args": {}
     |  }""".trimMargin()
             }
-
         val systemInstruction = """
 You are a helpful assistant. You can answer questions by using the tools provided below.
-
 **TOOLS:**
 $toolsAsJsonArray
-
 **INSTRUCTIONS:**
 1. Examine the user's question.
 2. Decide if a tool can help. If so, respond with a `<tool_call>` containing the correct tool JSON.
 3. After you receive the `<start_of_turn>tool` result, provide the final answer to the user.
-
 **EXAMPLE:**
 <start_of_turn>user
 What is the battery level?<end_of_turn>
@@ -580,53 +526,36 @@ What is the battery level?<end_of_turn>
 <start_of_turn>model
 Your device's battery is at 85%.<end_of_turn>
     """.trimIndent()
-
         promptBuilder.append(systemInstruction)
         promptBuilder.append("\n\n**CURRENT CONVERSATION:**\n")
-
         history.forEach { message ->
             when (message.type) {
-                MessageType.USER -> {
-                    promptBuilder.append("<start_of_turn>user\n${message.text}<end_of_turn>\n")
-                }
-
+                MessageType.USER -> promptBuilder.append("<start_of_turn>user\n${message.text}<end_of_turn>\n")
                 MessageType.MODEL -> {
                     if (message.text.isNotBlank()) {
                         promptBuilder.append("<start_of_turn>model\n${message.text}<end_of_turn>\n")
                     }
                 }
-
-                MessageType.TOOL_RESULT -> {
-                    promptBuilder.append("<start_of_turn>tool\n${message.text}<end_of_turn>\n")
-                }
-
+                MessageType.TOOL_RESULT -> promptBuilder.append("<start_of_turn>tool\n${message.text}<end_of_turn>\n")
                 MessageType.SYSTEM -> {}
             }
         }
         promptBuilder.append("<start_of_turn>model\n")
-
         return promptBuilder.toString()
     }
 
-
     private fun buildLlama3Prompt(history: List<UiMessage>): String {
         val historyBuilder = StringBuilder()
-
         historyBuilder.append("<|begin_of_text|>")
         historyBuilder.append("<|start_header_id|>system<|end_header_id|>\n\n$masterSystemPrompt<|eot_id|>")
-
         for (message in history) {
             when (message.type) {
-                MessageType.USER -> {
-                    historyBuilder.append("<|start_header_id|>user<|end_header_id|>\n\n${message.text}<|eot_id|>")
-                }
-
+                MessageType.USER -> historyBuilder.append("<|start_header_id|>user<|end_header_id|>\n\n${message.text}<|eot_id|>")
                 MessageType.MODEL -> {
                     if (message.text.isNotBlank()) {
                         historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n${message.text}")
                     }
                 }
-
                 MessageType.SYSTEM -> {}
                 MessageType.TOOL_RESULT -> {
                     historyBuilder.append("<|start_header_id|>tool<|end_header_id|>\n")
@@ -635,26 +564,16 @@ Your device's battery is at 85%.<end_of_turn>
                 }
             }
         }
-
         historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n")
-
         return historyBuilder.toString()
     }
 
     fun onDownloadableClicked(item: Downloadable, dm: DownloadManager) {
         val currentState = _modelStates.value?.get(item.name)
         when (currentState) {
-            is DownloadUiState.Downloaded -> {
-                load(item.destination.path)
-            }
-
-            is DownloadUiState.Ready, is DownloadUiState.Error, null -> {
-                startDownload(item, dm)
-            }
-
-            is DownloadUiState.Downloading -> {
-                // Already downloading, do nothing
-            }
+            is DownloadUiState.Downloaded -> load(item.destination.path)
+            is DownloadUiState.Ready, is DownloadUiState.Error, null -> startDownload(item, dm)
+            is DownloadUiState.Downloading -> {}
         }
     }
 
@@ -668,7 +587,6 @@ Your device's battery is at 85%.<end_of_turn>
         }
         log("Saving ${item.name} to ${item.destination.path}")
         val id = dm.enqueue(request)
-
         customScope.launch {
             monitorDownload(item, id, dm)
         }
@@ -683,32 +601,26 @@ Your device's battery is at 85%.<end_of_turn>
             }
             if (!cursor.moveToFirst() || cursor.count < 1) {
                 cursor.close()
-                updateModelState(item.name, DownloadUiState.Ready) // Assume canceled
+                updateModelState(item.name, DownloadUiState.Ready)
                 return
             }
-
             val pix = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
             val tix = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
             val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-
             val sofar = cursor.getLongOrNull(pix) ?: 0
             val total = cursor.getLongOrNull(tix) ?: 1
             val status = cursor.getInt(statusIndex)
             cursor.close()
-
             if (status == DownloadManager.STATUS_SUCCESSFUL || sofar == total) {
                 updateModelState(item.name, DownloadUiState.Downloaded)
                 return
             }
-
             if (status == DownloadManager.STATUS_FAILED) {
                 updateModelState(item.name, DownloadUiState.Error("Download failed"))
                 return
             }
-
             val progress = ((sofar * 100.0) / total).toInt()
             updateModelState(item.name, DownloadUiState.Downloading(progress))
-
             delay(1000L)
         }
     }

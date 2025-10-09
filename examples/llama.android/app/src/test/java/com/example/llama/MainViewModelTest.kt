@@ -93,7 +93,6 @@ class MainViewModelTest {
         val modelPath = "/fake/path/to/model.gguf"
         val expectedContextSize = 2048
         whenever(mockLlamaAndroid.getContextSize()).thenReturn(expectedContextSize)
-        // No need to mock llamaAndroid.load(), as it returns Unit and mocks do nothing by default.
 
         viewModel.load(modelPath)
 
