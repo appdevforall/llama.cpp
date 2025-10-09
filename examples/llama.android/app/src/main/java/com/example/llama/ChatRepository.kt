@@ -51,11 +51,11 @@ class ChatRepository(
 
     private val _messages = MutableStateFlow<List<UiMessage>>(
         listOf(
-            UiMessage(
-                id = messageIdCounter.getAndIncrement(),
-                text = "Hello! How can I help you today?",
-                type = MessageType.MODEL
-            )
+//            UiMessage(
+//                id = messageIdCounter.getAndIncrement(),
+//                text = "Hello! How can I help you today?",
+//                type = MessageType.MODEL
+//            )
         )
     )
     val messages: StateFlow<List<UiMessage>> = _messages.asStateFlow()
