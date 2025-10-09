@@ -514,8 +514,9 @@ class MainViewModel(
     private fun buildGemma2Prompt(history: List<UiMessage>): String {
         val promptBuilder = StringBuilder()
 
+        // --- 1. System Preamble with One-Shot Example ---
         val toolsAsJsonArray =
-            tools.values.joinToString(prefix = "[", postfix = "]", separator = ",\n") { tool ->
+            tools.values.joinToString(prefix = "[\n", postfix = "\n]", separator = ",\n") { tool ->
                 """  {
     |    "tool_name": "${tool.name}",
     |    "description": "${tool.description.replace("\"", "\\\"")}",
@@ -523,28 +524,38 @@ class MainViewModel(
     |  }""".trimMargin()
             }
 
-        // A single, clear instruction block
         val systemInstruction = """
-You are a helpful assistant. You have access to the following tools:
+You are a helpful assistant. You can answer questions by using the tools provided below.
+
+**TOOLS:**
 $toolsAsJsonArray
 
-To use a tool, you must respond ONLY with a single <tool_call> XML tag containing a valid JSON object.
-Example of a tool call:
+**INSTRUCTIONS:**
+1. Examine the user's question.
+2. Decide if a tool can help. If so, respond with a `<tool_call>` containing the correct tool JSON.
+3. After you receive the `<start_of_turn>tool` result, provide the final answer to the user.
+
+**EXAMPLE:**
+<start_of_turn>user
+What is the battery level?<end_of_turn>
+<start_of_turn>model
 <tool_call>
 {
-  "tool_name": "get_current_datetime",
+  "tool_name": "get_device_battery",
   "args": {}
 }
-</tool_call>
-
-After the tool is called, you will receive the result in a <start_of_turn>tool turn. You must then use that result to answer the user's original question in a final <start_of_turn>model turn. Do not call another tool after receiving a tool result.
+</tool_call><end_of_turn>
+<start_of_turn>tool
+[Tool Result for get_device_battery]: Device battery is at 85%.<end_of_turn>
+<start_of_turn>model
+Your device's battery is at 85%.<end_of_turn>
     """.trimIndent()
 
         promptBuilder.append(systemInstruction)
-        promptBuilder.append("\n\n") // Separation between system prompt and history
+        promptBuilder.append("\n\n**CURRENT CONVERSATION:**\n") // A clear separator
 
         // --- 2. Build Conversation History ---
-        // This part remains the same, but it's now the only thing that uses the turn structure
+        // This logic is correct and does not need to be changed.
         history.forEach { message ->
             when (message.type) {
                 MessageType.USER -> {
