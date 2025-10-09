@@ -48,7 +48,7 @@ class MainViewModelTest {
         whenever(mockChatRepository.messages).thenReturn(messagesFlow)
 
         // Act: Initialize the ViewModel.
-        viewModel = MainViewModel(mockApplication, mockChatRepository)
+        viewModel = MainViewModel(mockChatRepository)
 
         // Assert: The ViewModel's stateFlow should immediately reflect the repository's flow.
         assertEquals(testMessages, viewModel.uiMessages.value)
@@ -74,7 +74,7 @@ class MainViewModelTest {
 
         // For this test, the repository flow can be empty.
         whenever(mockChatRepository.messages).thenReturn(MutableStateFlow(emptyList()))
-        viewModel = MainViewModel(mockApplication, mockChatRepository)
+        viewModel = MainViewModel(mockChatRepository)
 
         // Set the state on the ViewModel that will be passed to the repository.
         viewModel.updateMessage(userInput)
@@ -93,7 +93,7 @@ class MainViewModelTest {
     fun `send does not delegate if message is blank`() = runTest {
         // Arrange
         whenever(mockChatRepository.messages).thenReturn(MutableStateFlow(emptyList()))
-        viewModel = MainViewModel(mockApplication, mockChatRepository)
+        viewModel = MainViewModel(mockChatRepository)
         viewModel.updateMessage("   ") // Blank message
 
         // Act
@@ -113,7 +113,7 @@ class MainViewModelTest {
     fun `clear correctly delegates the call to the repository`() = runTest {
         // Arrange
         whenever(mockChatRepository.messages).thenReturn(MutableStateFlow(emptyList()))
-        viewModel = MainViewModel(mockApplication, mockChatRepository)
+        viewModel = MainViewModel(mockChatRepository)
 
         // Act
         viewModel.clear()
@@ -126,7 +126,7 @@ class MainViewModelTest {
     fun `bench correctly delegates the call to the repository`() = runTest {
         // Arrange
         whenever(mockChatRepository.messages).thenReturn(MutableStateFlow(emptyList()))
-        viewModel = MainViewModel(mockApplication, mockChatRepository)
+        viewModel = MainViewModel(mockChatRepository)
         val pp = 512
         val tg = 128
         val pl = 1

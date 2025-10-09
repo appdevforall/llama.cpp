@@ -1,9 +1,10 @@
 package com.example.llama
 
-import android.app.Application
 import android.app.DownloadManager
 import android.content.Context
+import android.database.Cursor
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.core.database.getLongOrNull
 import androidx.core.net.toUri
 import androidx.lifecycle.LiveData
@@ -28,8 +29,7 @@ const val PREFS_NAME = "LlamaPrefs"
  * between the UI and the data/domain layers.
  */
 class MainViewModel(
-    private val application: Application,
-    private val chatRepository: ChatRepository
+    private val chatRepository: ChatRepository,
 ) : ViewModel() {
 
     // --- State Exposure ---
@@ -74,7 +74,7 @@ class MainViewModel(
         viewModelScope.launch {
             // The logic to copy the file from URI to a cache location is a UI concern.
             val destinationFile = withContext(viewModelScope.coroutineContext) {
-                val fileName = getFileName(uri, context)
+                val fileName = getFileName(context, uri)
                 val dest = File(context.cacheDir, fileName)
                 context.contentResolver.openInputStream(uri)?.use { inputStream ->
                     FileOutputStream(dest).use { outputStream ->
@@ -214,10 +214,35 @@ class MainViewModel(
         _savedModelUri.value = savedUriString?.toUri()
     }
 
-    private fun getFileName(uri: Uri, context: Context): String {
-        // A helper to get a displayable name for a file from its content URI.
-        // This is UI-related and thus belongs in the ViewModel/UI layer.
-        // ... (implementation from MainActivity)
-        return "temp_model.gguf" // Simplified
+    private fun getFileName(context: Context, uri: Uri): String {
+        var result: String? = null
+        if (uri.scheme == "content") {
+            val cursor: Cursor? = context.contentResolver.query(uri, null, null, null, null)
+            try {
+                if (cursor != null && cursor.moveToFirst()) {
+                    val colIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (colIndex >= 0) {
+                        result = cursor.getString(colIndex)
+                    }
+                }
+            } finally {
+                cursor?.close()
+            }
+        }
+        if (result == null) {
+            result = uri.path
+            val cut = result?.lastIndexOf('/')
+            if (cut != null && cut != -1) {
+                result = result?.substring(cut + 1)
+            }
+        }
+        return result?.ifBlank { "temp_model.gguf" } ?: "temp_model.gguf"
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        viewModelScope.launch {
+            chatRepository.cleanup()
+        }
     }
 }

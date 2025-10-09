@@ -16,7 +16,7 @@ class MainViewModelFactory(private val application: Application) : ViewModelProv
 
             // 3. Create the ViewModel, which now depends on the repository
             @Suppress("UNCHECKED_CAST")
-            return MainViewModel(application, chatRepository) as T
+            return MainViewModel(chatRepository) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }

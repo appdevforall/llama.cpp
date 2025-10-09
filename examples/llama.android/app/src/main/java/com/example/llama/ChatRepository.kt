@@ -75,7 +75,8 @@ class ChatRepository(
         if (isToolUseEnabled) {
             runAgentLoop()
         } else {
-            runSimpleInference(userInput, isStreaming)
+            val fullPrompt = buildPromptWithHistory(_messages.value)
+            runSimpleInference(fullPrompt, isStreaming)
         }
     }
 
@@ -339,5 +340,15 @@ Your device's battery is at 85%.<end_of_turn>
         }
         historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n")
         return historyBuilder.toString()
+    }
+
+    suspend fun cleanup() {
+        // This method can be called from ViewModel's onCleared.
+        try {
+            llamaAndroid.unload()
+            Log.d(tag, "LLamaAndroid resources unloaded successfully.")
+        } catch (e: Exception) {
+            Log.e(tag, "Error during LLamaAndroid unload", e)
+        }
     }
 }
