@@ -21,8 +21,12 @@ import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.edit
 import androidx.core.content.getSystemService
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.llama.databinding.ActivityMainBinding
+import kotlinx.coroutines.launch
 import java.io.File
 
 class MainActivity(
@@ -83,8 +87,8 @@ class MainActivity(
 
         val free = Formatter.formatFileSize(this, availableMemory().availMem)
         val total = Formatter.formatFileSize(this, availableMemory().totalMem)
-        viewModel.log("Current memory: $free / $total")
-        viewModel.log("Downloads directory: ${getExternalFilesDir(null)}")
+//        viewModel.log("Current memory: $free / $total")
+//        viewModel.log("Downloads directory: ${getExternalFilesDir(null)}")
 
         viewModel.checkInitialSavedModel(applicationContext)
 
@@ -164,12 +168,17 @@ class MainActivity(
     }
 
     private fun observeViewModel() {
-        viewModel.uiMessages.observe(this) { messages ->
-            messageAdapter.submitList(messages) {
-                binding.messagesRecyclerView.scrollToPosition(messages.size - 1)
+        // Use lifecycleScope to collect the StateFlow safely
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.uiMessages.collect { messages ->
+                    messageAdapter.submitList(messages)
+                    if (messages.isNotEmpty()) {
+                        binding.messagesRecyclerView.scrollToPosition(messages.size - 1)
+                    }
+                }
             }
         }
-
         viewModel.modelStates.observe(this) { states ->
             models.forEachIndexed { index, model ->
                 val button = binding.downloadableModelsContainer.getChildAt(index) as? Button
@@ -210,8 +219,8 @@ class MainActivity(
     }
 
     private fun send() {
-        val message = binding.messageEditText.text.toString()
-        viewModel.updateMessage(message)
+        // The ViewModel property can be bound directly or updated like this
+        viewModel.message = binding.messageEditText.text.toString()
         viewModel.send()
         binding.messageEditText.text.clear()
     }
@@ -225,14 +234,14 @@ class MainActivity(
             if (hasPermission) {
                 viewModel.loadModelFromUri(savedUri, this)
             } else {
-                viewModel.log("Permission for saved model lost. Please select it again.")
+//                viewModel.log("Permission for saved model lost. Please select it again.")
                 getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit {
                     remove(SAVED_MODEL_URI_KEY)
                 }
                 viewModel.onNewModelSelected(null)
             }
         } else {
-            viewModel.log("No saved model found.")
+//            viewModel.log("No saved model found.")
         }
     }
 

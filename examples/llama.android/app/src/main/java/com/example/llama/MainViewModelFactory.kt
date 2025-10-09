@@ -8,8 +8,15 @@ import androidx.lifecycle.ViewModelProvider
 class MainViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
+            // 1. Create the single instance of LLamaAndroid
+            val llamaAndroid = LLamaAndroid.instance()
+
+            // 2. Create the repository, which depends on LLamaAndroid
+            val chatRepository = ChatRepository(application, llamaAndroid)
+
+            // 3. Create the ViewModel, which now depends on the repository
             @Suppress("UNCHECKED_CAST")
-            return MainViewModel(application, LLamaAndroid.Companion.instance()) as T
+            return MainViewModel(application, chatRepository) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }
