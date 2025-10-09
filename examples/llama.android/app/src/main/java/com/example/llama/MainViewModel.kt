@@ -303,31 +303,39 @@ class MainViewModel(
                 updateLastMessageDuration(durationMs)
                 break
             } else {
-                val toolCall = parseToolCall(finalResponse, tools.keys)
-                if (toolCall != null) {
-                    val toolCallString =
-                        "<tool_call>\n" + "{\n" + "  \"tool_name\": \"${toolCall.toolName}\",\n" + "  \"args\": {}\n" + "}\n" + "</tool_call>"
-                    updateLastMessageDuration(durationMs)
-                    updateLastMessage(toolCallString)
-                    Log.d("AgentDebug", "Tool Call Detected: $toolCall")
-                    val tool = tools[toolCall.toolName]
-                    if (tool != null) {
-                        val result = tool.execute(getApplication(), toolCall.args)
-                        Log.d("AgentDebug", "Tool Response: \"$result\"")
-                        addMessage(result, MessageType.TOOL_RESULT)
-                        addMessage("", MessageType.MODEL)
+                try {
+                    val toolCall = parseToolCall(finalResponse, tools.keys)
+                    if (toolCall != null) {
+                        val toolCallString =
+                            "<tool_call>\n" + "{\n" + "  \"tool_name\": \"${toolCall.toolName}\",\n" + "  \"args\": {}\n" + "}\n" + "</tool_call>"
+                        updateLastMessageDuration(durationMs)
+                        updateLastMessage(toolCallString)
+                        Log.d("AgentDebug", "Tool Call Detected: $toolCall")
+                        val tool = tools[toolCall.toolName]
+                        if (tool != null) {
+                            val result = tool.execute(getApplication(), toolCall.args)
+                            Log.d("AgentDebug", "Tool Response: \"$result\"")
+                            addMessage(result, MessageType.TOOL_RESULT)
+                            addMessage("", MessageType.MODEL)
+                        } else {
+                            val errorMsg =
+                                "Error: Model tried to call unknown tool '${toolCall.toolName}'"
+                            updateLastMessage(errorMsg)
+                            Log.e("AgentDebug", errorMsg)
+                            break
+                        }
                     } else {
-                        val errorMsg =
-                            "Error: Model tried to call unknown tool '${toolCall.toolName}'"
-                        updateLastMessage(errorMsg)
-                        Log.e("AgentDebug", errorMsg)
+                        updateLastMessage(finalResponse)
+                        updateLastMessageDuration(durationMs)
+                        Log.d("AgentDebug", "No tool call detected. Model gave a direct answer.")
                         break
                     }
-                } else {
-                    updateLastMessage(finalResponse)
-                    updateLastMessageDuration(durationMs)
-                    Log.d("AgentDebug", "No tool call detected. Model gave a direct answer.")
-                    break
+                } catch (t: Throwable) {
+                    // This block will catch the crash and tell us exactly what it is.
+                    Log.e("VIEWMODEL_CRASH", "Critical error in runAgentLoop!", t)
+                    // We update the UI with a specific message to see it in the test.
+                    updateLastMessage("CRASHED: ${t.javaClass.simpleName}")
+                    break // Exit the loop after a crash
                 }
             }
             currentTurn++
@@ -400,9 +408,11 @@ class MainViewModel(
     fun updateMessage(newMessage: String) {
         message = newMessage
     }
+
     fun clear() {
         _uiMessages.value = listOf()
     }
+
     fun log(message: String) {
         addMessage(message, MessageType.SYSTEM)
     }
@@ -457,6 +467,7 @@ Your device's battery is at 85%.<end_of_turn>
                         promptBuilder.append("<start_of_turn>model\n${message.text}<end_of_turn>\n")
                     }
                 }
+
                 MessageType.TOOL_RESULT -> promptBuilder.append("<start_of_turn>tool\n${message.text}<end_of_turn>\n")
                 MessageType.SYSTEM -> {}
             }
@@ -477,6 +488,7 @@ Your device's battery is at 85%.<end_of_turn>
                         historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n${message.text}")
                     }
                 }
+
                 MessageType.SYSTEM -> {}
                 MessageType.TOOL_RESULT -> {
                     historyBuilder.append("<|start_header_id|>tool<|end_header_id|>\n")
