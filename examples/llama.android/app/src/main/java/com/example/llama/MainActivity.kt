@@ -19,6 +19,7 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.edit
 import androidx.core.content.getSystemService
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.llama.databinding.ActivityMainBinding
@@ -71,11 +72,8 @@ class MainActivity(
                     uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
-                // Save to SharedPreferences
-                prefs.edit().putString(SAVED_MODEL_URI_KEY, uri.toString()).apply()
-                // Notify the ViewModel of the new selection
+                prefs.edit { putString(SAVED_MODEL_URI_KEY, uri.toString()) }
                 viewModel.onNewModelSelected(uri)
-                // You can optionally load it immediately
                 viewModel.loadModelFromUri(uri, this@MainActivity)
             }
         }
@@ -176,7 +174,6 @@ class MainActivity(
         }
 
         viewModel.modelStates.observe(this) { states ->
-            // This now works perfectly!
             models.forEachIndexed { index, model ->
                 val button = binding.downloadableModelsContainer.getChildAt(index) as? Button
                 val state = states[model.name]
@@ -205,12 +202,10 @@ class MainActivity(
         }
         viewModel.savedModelUri.observe(this) { uri ->
             if (uri != null) {
-                // A model is saved
                 binding.loadSavedButton.isEnabled = true
                 binding.savedModelPathTextView.visibility = View.VISIBLE
                 binding.savedModelPathTextView.text = "Saved: ${getFileNameFromUri(uri)}"
             } else {
-                // No model is saved
                 binding.loadSavedButton.isEnabled = false
                 binding.savedModelPathTextView.visibility = View.GONE
             }
@@ -225,7 +220,6 @@ class MainActivity(
     }
 
     private fun loadFromSaved() {
-        // Now, this function can rely on the ViewModel's state
         val savedUri = viewModel.savedModelUri.value
         if (savedUri != null) {
             val hasPermission = contentResolver.persistedUriPermissions.any {
@@ -235,14 +229,12 @@ class MainActivity(
                 viewModel.loadModelFromUri(savedUri, this)
             } else {
                 viewModel.log("Permission for saved model lost. Please select it again.")
-                // Clear the invalid preference and update the ViewModel
-                getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-                    .remove(SAVED_MODEL_URI_KEY).apply()
-                viewModel.onNewModelSelected(null) // This will disable the button
+                getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit {
+                    remove(SAVED_MODEL_URI_KEY)
+                }
+                viewModel.onNewModelSelected(null)
             }
         } else {
-            // This case should ideally not happen since the button would be disabled,
-            // but it's good practice to handle it.
             viewModel.log("No saved model found.")
         }
     }
@@ -266,7 +258,7 @@ class MainActivity(
             result = uri.path
             val cut = result?.lastIndexOf('/')
             if (cut != null && cut != -1) {
-                result = result?.substring(cut + 1)
+                result = result.substring(cut + 1)
             }
         }
         return result ?: "Unknown File"

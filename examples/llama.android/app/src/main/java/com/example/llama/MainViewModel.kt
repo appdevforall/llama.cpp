@@ -31,8 +31,6 @@ import java.util.regex.Pattern
 class MainViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
-            // This is where we manually call our ViewModel's constructor
-            // with all the required parameters.
             @Suppress("UNCHECKED_CAST")
             return MainViewModel(application, LLamaAndroid.instance()) as T
         }
@@ -42,7 +40,6 @@ class MainViewModelFactory(private val application: Application) : ViewModelProv
 
 private data class ToolCall(val toolName: String, val args: Map<String, Any>)
 
-// THE NEW SYSTEM PROMPT
 private const val SYSTEM_PROMPT = """
 You are a helpful and smart assistant integrated into an Android application.
 You have access to the following tools to get real-time information. Do not make up information for these tools.
@@ -86,7 +83,7 @@ sealed interface DownloadUiState {
 enum class ModelFamily {
     LLAMA3,
     GEMMA2,
-    UNKNOWN // A fallback for models we can't identify
+    UNKNOWN
 }
 
 class MainViewModel(
@@ -198,7 +195,7 @@ class MainViewModel(
             result = uri.path
             val cut = result?.lastIndexOf('/')
             if (cut != null && cut != -1) {
-                result = result?.substring(cut + 1)
+                result = result.substring(cut + 1)
             }
         }
         return result?.ifBlank { "temp_model.gguf" } ?: "temp_model.gguf"
@@ -253,7 +250,6 @@ class MainViewModel(
     private fun updateLastMessageDuration(durationMs: Long) {
         if (conversation.isNotEmpty()) {
             val lastMessage = conversation.last()
-            // Ensure we're updating a model message
             if (lastMessage.type == MessageType.MODEL) {
                 val updatedMessage = lastMessage.copy(durationMs = durationMs)
                 conversation = conversation.dropLast(1) + updatedMessage
@@ -300,10 +296,8 @@ class MainViewModel(
                 conversation.getOrNull(conversation.size - 2)?.type == MessageType.TOOL_RESULT
 
             val stopStrings = if (isFinalAnswerTurn) {
-                // After a tool result, we expect a final answer, ending with <end_of_turn>
                 listOf("<end_of_turn>")
             } else {
-                // Initially, we expect a tool call, ending with </tool_call>
                 listOf("</tool_call>")
             }
 
@@ -323,7 +317,6 @@ class MainViewModel(
             }
             val durationMs = (System.nanoTime() - startTime) / 1_000_000
 
-            // Clean the response by taking everything before the first stop string.
             val finalResponse = modelResponse.split(stopStrings.first()).first()
             Log.d("AgentDebug", "Raw Model Result: \"$modelResponse\"")
             Log.d("AgentDebug", "Trimmed Final Result: \"$finalResponse\"")
@@ -332,11 +325,9 @@ class MainViewModel(
                 updateLastMessage(finalResponse)
                 Log.d("AgentDebug", "Final answer received. Concluding.")
                 updateLastMessageDuration(durationMs)
-                break // Exit the loop successfully.
+                break
 
             } else {
-                // --- A TOOL CALL IS EXPECTED ---
-                // We are in the "Tool Selection State".
                 val toolCall = parseToolCall(finalResponse)
 
                 if (toolCall != null) {
@@ -344,7 +335,7 @@ class MainViewModel(
                     val toolCallString = "<tool_call>\n" +
                         "{\n" +
                         "  \"tool_name\": \"${toolCall.toolName}\",\n" +
-                        "  \"args\": {}\n" + // Assuming simple args for now
+                        "  \"args\": {}\n" +
                         "}\n" +
                         "</tool_call>"
 
@@ -363,13 +354,13 @@ class MainViewModel(
                             "Error: Model tried to call unknown tool '${toolCall.toolName}'"
                         updateLastMessage(errorMsg)
                         Log.e("AgentDebug", errorMsg)
-                        break // Exit loop on error
+                        break
                     }
                 } else {
                     updateLastMessage(finalResponse)
                     updateLastMessageDuration(durationMs)
                     Log.d("AgentDebug", "No tool call detected. Model gave a direct answer.")
-                    break // Exit the loop
+                    break
                 }
             }
             currentTurn++
@@ -377,8 +368,6 @@ class MainViewModel(
     }
 
     private fun parseToolCall(responseText: String): ToolCall? {
-        // --- Strategy 1: Look for perfect JSON (the "happy path") ---
-        // First, we try to find and parse a clean JSON object. This works for capable models.
         val jsonString = findPotentialJsonObjectString(responseText)
         if (jsonString != null) {
             val toolCallFromJson = parseJsonObjectToToolCall(jsonString)
@@ -388,27 +377,21 @@ class MainViewModel(
             }
         }
 
-        // --- Strategy 2: Recovery Mode for malformed responses ---
-        // If JSON parsing fails, we enter recovery mode. This is crucial for smaller models
-        // that might just output the tool name without the proper JSON structure.
         Log.w(
             "ToolParse",
             "Could not parse JSON. Attempting recovery by searching for tool name..."
         )
 
-        // Extract any text that might be inside a <tool_call> tag.
         val tagContent = responseText.substringAfter("<tool_call>", "")
             .substringBefore("</tool_call>", "").trim()
 
         if (tagContent.isNotBlank()) {
-            // Check if any of our known tool names are mentioned inside the tag.
             for (toolName in tools.keys) {
                 if (tagContent.contains(toolName)) {
                     Log.d(
                         "ToolParse",
                         "RECOVERY SUCCESS: Found tool name '$toolName' in malformed output."
                     )
-                    // We successfully recovered the intent! Assume no arguments.
                     return ToolCall(toolName, emptyMap())
                 }
             }
@@ -418,22 +401,15 @@ class MainViewModel(
             "ToolParse",
             "RECOVERY FAILED: No valid JSON or known tool name found in the response."
         )
-        return null // Give up if both strategies fail.
+        return null
     }
 
-    /**
-     * [UPDATED/MORE ROBUST]
-     * Helper function that isolates a potential JSON object string (`{...}`).
-     * It robustly finds the first '{' and last '}' to handle surrounding whitespace.
-     */
     private fun findPotentialJsonObjectString(responseText: String): String? {
         var candidateString = responseText
 
-        // First, check if <tool_call> tags exist and prioritize their content.
         val tagPattern = Pattern.compile("<tool_call>(.*?)</tool_call>", Pattern.DOTALL)
         val tagMatcher = tagPattern.matcher(responseText)
         if (tagMatcher.find()) {
-            // If tags are found, their content becomes our new area to search.
             candidateString = tagMatcher.group(1) ?: ""
         }
 
@@ -441,21 +417,13 @@ class MainViewModel(
         val firstBraceIndex = candidateString.indexOf('{')
         val lastBraceIndex = candidateString.lastIndexOf('}')
 
-        // Check if we found both braces in the correct order.
         if (firstBraceIndex != -1 && lastBraceIndex != -1 && firstBraceIndex < lastBraceIndex) {
-            // Extract the substring from the first '{' to the last '}' inclusive.
             return candidateString.substring(firstBraceIndex, lastBraceIndex + 1)
         }
 
-        // If we couldn't find a valid JSON object structure, return null.
         return null
     }
 
-
-    /**
-     * Re-usable helper to parse a string representing a single JSON Object into a ToolCall.
-     * (This function does not need to change).
-     */
     private fun parseJsonObjectToToolCall(jsonStr: String): ToolCall? {
         return try {
             val json = JSONObject(jsonStr)
@@ -500,7 +468,6 @@ class MainViewModel(
     fun load(pathToModel: String) {
         viewModelScope.launch {
             try {
-                // DETECT and set the model family
                 currentModelFamily = detectModelFamily(pathToModel)
                 log("Detected model family: $currentModelFamily")
 
@@ -522,13 +489,12 @@ class MainViewModel(
         return when {
             "gemma" in fileName -> ModelFamily.GEMMA2
             "llama-3" in fileName || "llama3" in fileName -> ModelFamily.LLAMA3
-            // Add more rules here for other models like phi, mistral, etc.
             else -> {
                 Log.w(
                     "ModelDetect",
                     "Could not determine model family for '$fileName'. Defaulting to Llama3."
                 )
-                ModelFamily.LLAMA3 // Default to the original behavior
+                ModelFamily.LLAMA3
             }
         }
     }
@@ -565,7 +531,6 @@ class MainViewModel(
     private fun buildGemma2Prompt(history: List<UiMessage>): String {
         val promptBuilder = StringBuilder()
 
-        // --- 1. System Preamble with One-Shot Example ---
         val toolsAsJsonArray =
             tools.values.joinToString(prefix = "[\n", postfix = "\n]", separator = ",\n") { tool ->
                 """  {
@@ -603,10 +568,8 @@ Your device's battery is at 85%.<end_of_turn>
     """.trimIndent()
 
         promptBuilder.append(systemInstruction)
-        promptBuilder.append("\n\n**CURRENT CONVERSATION:**\n") // A clear separator
+        promptBuilder.append("\n\n**CURRENT CONVERSATION:**\n")
 
-        // --- 2. Build Conversation History ---
-        // This logic is correct and does not need to be changed.
         history.forEach { message ->
             when (message.type) {
                 MessageType.USER -> {
@@ -626,8 +589,6 @@ Your device's battery is at 85%.<end_of_turn>
                 MessageType.SYSTEM -> {}
             }
         }
-
-        // --- 3. Cue the model for its response ---
         promptBuilder.append("<start_of_turn>model\n")
 
         return promptBuilder.toString()
@@ -637,7 +598,6 @@ Your device's battery is at 85%.<end_of_turn>
     private fun buildLlama3Prompt(history: List<UiMessage>): String {
         val historyBuilder = StringBuilder()
 
-        // Add the special begin_of_text token ONLY at the start.
         historyBuilder.append("<|begin_of_text|>")
         historyBuilder.append("<|start_header_id|>system<|end_header_id|>\n\n$masterSystemPrompt<|eot_id|>")
 
@@ -646,23 +606,20 @@ Your device's battery is at 85%.<end_of_turn>
                 MessageType.USER -> {
                     historyBuilder.append("<|start_header_id|>user<|end_header_id|>\n\n${message.text}<|eot_id|>")
                 }
-                // The placeholder is the last message, so we don't append it to the prompt.
                 MessageType.MODEL -> {
                     if (message.text.isNotBlank()) {
                         historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n${message.text}")
                     }
                 }
-                // There are no SYSTEM messages in the initial turn for Llama 3.
                 MessageType.SYSTEM -> {}
                 MessageType.TOOL_RESULT -> {
-                    historyBuilder.append("<|start_header_id|>tool<|end_header_id|>\n") // Use the official 'tool' role for Gemma
-                    historyBuilder.append(message.text) // This should be the data returned by your tool, often as JSON
+                    historyBuilder.append("<|start_header_id|>tool<|end_header_id|>\n")
+                    historyBuilder.append(message.text)
                     historyBuilder.append("<|eot_id|>\n")
                 }
             }
         }
 
-        // Prompt the assistant to start its turn.
         historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n")
 
         return historyBuilder.toString()
