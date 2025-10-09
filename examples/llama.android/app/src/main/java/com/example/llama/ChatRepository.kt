@@ -229,21 +229,44 @@ class ChatRepository(
                 break
 
             } else {
-                val toolMap =
+
+                // Let's create a map of simple IDs to tool names
+                val toolIdMap =
                     tools.values.mapIndexed { index, tool -> (index + 1).toString() to tool.name }
                         .toMap()
-                val toolName = toolMap[finalResponse] // Look up the tool name by its ID
 
-                if (toolName != null) {
+// --- MODIFICATION START ---
+                var identifiedToolName: String? = null
+
+// First, check if the response is a valid ID
+                if (toolIdMap.containsKey(finalResponse)) {
+                    identifiedToolName = toolIdMap[finalResponse]
+                } else {
+                    // If not, check if the response CONTAINS a tool name
+                    // This makes our parser more robust to the model's mistake
+                    for (toolName in tools.keys) {
+                        if (finalResponse.contains(toolName)) {
+                            identifiedToolName = toolName
+                            break // Found a match, stop looking
+                        }
+                    }
+                }
+// --- MODIFICATION END ---
+
+
+                if (identifiedToolName != null) {
+                    // We found a tool call!
+                    val tool = tools[identifiedToolName]!!
+                    updateLastMessage("Tool Call: ${tool.name}")
                     updateLastMessageDuration(durationMs)
-                    updateLastMessage(toolName) // Show the tool call in the UI
-                    Log.d("AgentDebug", "Tool Call Detected: $toolName")
-                    val tool = tools[toolName]!!
+                    updateLastMessage(identifiedToolName) // Show the tool call in the UI
+                    Log.d("AgentDebug", "Tool Call Detected: $identifiedToolName")
                     updateLastMessage("Tool Call: ${tool.name}") // Update UI
 
                     val result = tool.execute(application, emptyMap()) // No args to pass
                     addMessage(result, MessageType.TOOL_RESULT)
                     addMessage("", MessageType.MODEL) // Placeholder for final answer
+                    // ... rest of the tool execution logic
                 } else {
                     // No tool call detected, this is the final answer.
                     updateLastMessage(finalResponse)
