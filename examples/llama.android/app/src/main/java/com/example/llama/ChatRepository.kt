@@ -162,54 +162,79 @@ class ChatRepository(
 
     private suspend fun runAgentLoop(maxTurns: Int = 5) {
         var currentTurn = 0
+
         while (currentTurn < maxTurns) {
-            Log.d(tag, "--- [Agent Loop: Turn ${currentTurn + 1}] ---")
+            Log.d("AgentDebug", "--- [Step ${currentTurn + 1}] ---")
             val currentHistory = _messages.value
+            // Determine if this turn is for generating the final answer
             val isFinalAnswerTurn =
                 currentHistory.getOrNull(currentHistory.size - 2)?.type == MessageType.TOOL_RESULT
-            val stopStrings =
-                if (isFinalAnswerTurn) listOf("<end_of_turn>") else listOf("</tool_call>")
+
+            val stopStrings = if (isFinalAnswerTurn) {
+                listOf("<end_of_turn>")
+            } else {
+                listOf("</tool_call>")
+            }
+
             val fullPromptHistory = buildPromptWithHistory(currentHistory)
+            Log.d("AgentDebug", "Final Prompt Sent:\n$fullPromptHistory")
 
             val startTime = System.nanoTime()
             val modelResponse = try {
-                withContext(ioDispatcher) {
+                llamaAndroid.clearKvCache()
+                withContext(Dispatchers.IO) {
                     llamaAndroid.send(fullPromptHistory, stop = stopStrings)
                         .reduce { acc, s -> acc + s }
                 }
             } catch (e: Exception) {
-                Log.e(tag, "Agent inference failed", e)
+                Log.e("AgentLoop", "Model inference failed", e)
                 "Error: Could not get a response from the model."
             }
             val durationMs = (System.nanoTime() - startTime) / 1_000_000
 
             val finalResponse = modelResponse.split(stopStrings.first()).first()
+            Log.d("AgentDebug", "Raw Model Result: \"$modelResponse\"")
+            Log.d("AgentDebug", "Trimmed Final Result: \"$finalResponse\"")
+
             if (isFinalAnswerTurn) {
                 updateLastMessage(finalResponse)
+                Log.d("AgentDebug", "Final answer received. Concluding.")
                 updateLastMessageDuration(durationMs)
-                break // End of loop
+                break
+
             } else {
                 val toolCall = parseToolCall(finalResponse, tools.keys)
+
                 if (toolCall != null) {
-                    val toolCallString =
-                        "<tool_call>\n{\n  \"tool_name\": \"${toolCall.toolName}\",\n  \"args\": {}\n}\n</tool_call>"
-                    updateLastMessage(toolCallString)
+                    // A tool call was found, as expected.
+                    val toolCallString = "<tool_call>\n" +
+                        "{\n" +
+                        "  \"tool_name\": \"${toolCall.toolName}\",\n" +
+                        "  \"args\": {}\n" +
+                        "}\n" +
+                        "</tool_call>"
+
                     updateLastMessageDuration(durationMs)
+                    updateLastMessage(toolCallString) // Show the tool call in the UI
+                    Log.d("AgentDebug", "Tool Call Detected: $toolCall")
 
                     val tool = tools[toolCall.toolName]
                     if (tool != null) {
                         val result = tool.execute(application, toolCall.args)
+                        Log.d("AgentDebug", "Tool Response: \"$result\"")
                         addMessage(result, MessageType.TOOL_RESULT)
                         addMessage("", MessageType.MODEL) // Add placeholder for the final answer
                     } else {
                         val errorMsg =
                             "Error: Model tried to call unknown tool '${toolCall.toolName}'"
                         updateLastMessage(errorMsg)
+                        Log.e("AgentDebug", errorMsg)
                         break
                     }
                 } else {
                     updateLastMessage(finalResponse)
                     updateLastMessageDuration(durationMs)
+                    Log.d("AgentDebug", "No tool call detected. Model gave a direct answer.")
                     break
                 }
             }
