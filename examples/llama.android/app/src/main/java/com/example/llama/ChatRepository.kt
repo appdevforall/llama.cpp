@@ -264,12 +264,80 @@ class ChatRepository(
         }
     }
 
-    // ... (buildLlama3Prompt and buildGemma2Prompt functions would be copied here as private methods) ...
-    // Note: These are large and unchanged from your ViewModel, so they are omitted for brevity.
-    // Just copy them directly into this class as private functions.
-    private fun buildLlama3Prompt(history: List<UiMessage>): String { /* ... */ return ""
+    private fun buildGemma2Prompt(history: List<UiMessage>): String {
+        val promptBuilder = StringBuilder()
+        val toolsAsJsonArray =
+            tools.values.joinToString(prefix = "[\n", postfix = "\n]", separator = ",\n") { tool ->
+                """  {
+    |    "tool_name": "${tool.name}",
+    |    "description": "${tool.description.replace("\"", "\\\"")}",
+    |    "args": {}
+    |  }""".trimMargin()
+            }
+        val systemInstruction = """
+You are a helpful assistant. You can answer questions by using the tools provided below.
+**TOOLS:**
+$toolsAsJsonArray
+**INSTRUCTIONS:**
+1. Examine the user's question.
+2. Decide if a tool can help. If so, respond with a `<tool_call>` containing the correct tool JSON.
+3. After you receive the `<start_of_turn>tool` result, provide the final answer to the user.
+**EXAMPLE:**
+<start_of_turn>user
+What is the battery level?<end_of_turn>
+<start_of_turn>model
+<tool_call>
+{
+  "tool_name": "get_device_battery",
+  "args": {}
+}
+</tool_call><end_of_turn>
+<start_of_turn>tool
+[Tool Result for get_device_battery]: Device battery is at 85%.<end_of_turn>
+<start_of_turn>model
+Your device's battery is at 85%.<end_of_turn>
+    """.trimIndent()
+        promptBuilder.append(systemInstruction)
+        promptBuilder.append("\n\n**CURRENT CONVERSATION:**\n")
+        history.forEach { message ->
+            when (message.type) {
+                MessageType.USER -> promptBuilder.append("<start_of_turn>user\n${message.text}<end_of_turn>\n")
+                MessageType.MODEL -> {
+                    if (message.text.isNotBlank()) {
+                        promptBuilder.append("<start_of_turn>model\n${message.text}<end_of_turn>\n")
+                    }
+                }
+
+                MessageType.TOOL_RESULT -> promptBuilder.append("<start_of_turn>tool\n${message.text}<end_of_turn>\n")
+                MessageType.SYSTEM -> {}
+            }
+        }
+        promptBuilder.append("<start_of_turn>model\n")
+        return promptBuilder.toString()
     }
 
-    private fun buildGemma2Prompt(history: List<UiMessage>): String { /* ... */ return ""
+    private fun buildLlama3Prompt(history: List<UiMessage>): String {
+        val historyBuilder = StringBuilder()
+        historyBuilder.append("<|begin_of_text|>")
+        historyBuilder.append("<|start_header_id|>system<|end_header_id|>\n\n$masterSystemPrompt<|eot_id|>")
+        for (message in history) {
+            when (message.type) {
+                MessageType.USER -> historyBuilder.append("<|start_header_id|>user<|end_header_id|>\n\n${message.text}<|eot_id|>")
+                MessageType.MODEL -> {
+                    if (message.text.isNotBlank()) {
+                        historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n${message.text}")
+                    }
+                }
+
+                MessageType.SYSTEM -> {}
+                MessageType.TOOL_RESULT -> {
+                    historyBuilder.append("<|start_header_id|>tool<|end_header_id|>\n")
+                    historyBuilder.append(message.text)
+                    historyBuilder.append("<|eot_id|>\n")
+                }
+            }
+        }
+        historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n")
+        return historyBuilder.toString()
     }
 }
