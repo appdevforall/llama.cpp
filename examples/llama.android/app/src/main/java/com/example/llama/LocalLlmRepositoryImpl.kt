@@ -1,14 +1,12 @@
 package com.example.llama
 
 import android.app.Application
-import android.llama.cpp.LLamaAndroid
 import android.util.Log
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.reduce
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.InternalSerializationApi
@@ -27,11 +25,11 @@ private const val SYSTEM_PROMPT = """
 
 /**
  * The single source of truth for chat data and business logic.
- * This class manages the conversation state and all interactions with LLamaAndroid.
+ * This class manages the conversation state and all interactions with the LlmInferenceEngine.
  */
 class LocalLlmRepositoryImpl(
     private val application: Application,
-    private val llamaAndroid: LLamaAndroid,
+    private val engine: LlmInferenceEngine,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
     private val tag: String = this::class.java.simpleName
@@ -74,7 +72,6 @@ class LocalLlmRepositoryImpl(
         val placeholder = if (isStreaming) "" else "..."
         addMessage(placeholder, MessageType.MODEL)
 
-        llamaAndroid.clearKvCache()
         if (isToolUseEnabled) {
             runAgentLoop()
         } else {
@@ -96,20 +93,20 @@ class LocalLlmRepositoryImpl(
                 Log.d(tag, "Switching models. Unloading: $loadedModelPath")
                 addMessage("Unloading previous model...", MessageType.SYSTEM)
                 withContext(ioDispatcher) {
-                    llamaAndroid.unload()
+                    engine.unloadModel()
                 }
             }
 
             currentModelFamily = detectModelFamily(pathToModel)
             addMessage("Detected model family: $currentModelFamily", MessageType.SYSTEM)
             withContext(ioDispatcher) {
-                llamaAndroid.load(pathToModel)
+                engine.loadModel(pathToModel)
             }
 
             loadedModelPath = pathToModel
             addMessage("Loaded $pathToModel", MessageType.SYSTEM)
 
-            val contextSize = llamaAndroid.getContextSize()
+            val contextSize = engine.getContextSize()
             addMessage("Model context size: $contextSize tokens", MessageType.SYSTEM)
 
         } catch (exc: IllegalStateException) {
@@ -125,7 +122,7 @@ class LocalLlmRepositoryImpl(
     suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1) {
         try {
             val start = System.nanoTime()
-            val warmupResult = llamaAndroid.bench(pp, tg, pl, nr)
+            val warmupResult = engine.bench(pp, tg, pl, nr)
             val end = System.nanoTime()
             addMessage(warmupResult, MessageType.MODEL)
 
@@ -136,7 +133,7 @@ class LocalLlmRepositoryImpl(
                 addMessage("Warm up took too long, aborting benchmark", MessageType.SYSTEM)
                 return
             }
-            val benchmarkResult = llamaAndroid.bench(512, 128, 1, 3)
+            val benchmarkResult = engine.bench(512, 128, 1, 3)
             addMessage(benchmarkResult, MessageType.SYSTEM)
         } catch (exc: IllegalStateException) {
             Log.e(tag, "bench() failed", exc)
@@ -163,12 +160,12 @@ class LocalLlmRepositoryImpl(
             withContext(ioDispatcher) {
                 if (isStreaming) {
                     var currentText = ""
-                    llamaAndroid.send(prompt).collect { responseChunk ->
+                    engine.runStreamingInference(prompt).collect { responseChunk ->
                         currentText += responseChunk
                         updateLastMessage(currentText)
                     }
                 } else {
-                    val modelResponse = llamaAndroid.send(prompt).reduce { acc, s -> acc + s }
+                    val modelResponse = engine.runInference(prompt)
                     updateLastMessage(modelResponse)
                 }
             }
@@ -203,10 +200,8 @@ class LocalLlmRepositoryImpl(
             Log.d("AgentDebug", "Final Prompt Sent:\n$fullPromptHistory")
             val startTime = System.nanoTime()
             val modelResponse = try {
-                llamaAndroid.clearKvCache()
                 withContext(Dispatchers.IO) {
-                    llamaAndroid.send(fullPromptHistory, stop = stopStrings)
-                        .reduce { acc, s -> acc + s }
+                    engine.runInference(fullPromptHistory, stopStrings = stopStrings)
                 }
             } catch (e: Exception) {
                 Log.e("AgentLoop", "Model inference failed", e)
@@ -299,6 +294,7 @@ class LocalLlmRepositoryImpl(
             }
         }
     }
+
     private fun detectModelFamily(path: String): ModelFamily {
         val lowerPath = path.lowercase()
         return when {
@@ -321,6 +317,7 @@ class LocalLlmRepositoryImpl(
                     buildGemma2Prompt(history)
                 }
             }
+
             else -> history.lastOrNull { it.type == MessageType.USER }?.text ?: ""
         }
     }
@@ -429,7 +426,7 @@ Answer:
 
     suspend fun cleanup() {
         try {
-            llamaAndroid.unload()
+            engine.unloadModel()
             loadedModelPath = null
             Log.d(tag, "LLamaAndroid resources unloaded successfully.")
         } catch (e: Exception) {
