@@ -82,18 +82,14 @@ class ChatRepository(
     }
 
     suspend fun loadModel(pathToModel: String) {
-        // --- NEW LOGIC: START ---
-
-        // 1. Check if the user is trying to load the model that's already active.
         if (pathToModel == loadedModelPath) {
             val message = "Model is already loaded."
             Log.d(tag, message)
             addMessage(message, MessageType.SYSTEM)
-            return // Exit the function early
+            return
         }
 
         try {
-            // 2. Check if a *different* model is loaded. If so, unload it first.
             if (loadedModelPath != null) {
                 Log.d(tag, "Switching models. Unloading: $loadedModelPath")
                 addMessage("Unloading previous model...", MessageType.SYSTEM)
@@ -102,17 +98,12 @@ class ChatRepository(
                 }
             }
 
-            // --- NEW LOGIC: END ---
-
-
-            // --- Original logic continues below ---
             currentModelFamily = detectModelFamily(pathToModel)
             addMessage("Detected model family: $currentModelFamily", MessageType.SYSTEM)
             withContext(ioDispatcher) {
                 llamaAndroid.load(pathToModel)
             }
 
-            // If loading was successful, update our tracker variable
             loadedModelPath = pathToModel
             addMessage("Loaded $pathToModel", MessageType.SYSTEM)
 
@@ -125,7 +116,6 @@ class ChatRepository(
                 exc.message ?: "An unknown error occurred during model loading.",
                 MessageType.SYSTEM
             )
-            // If loading fails, make sure our tracker is cleared.
             loadedModelPath = null
         }
     }
@@ -164,8 +154,6 @@ class ChatRepository(
             )
         )
     }
-
-    // --- Internal Logic ---
 
     private suspend fun runSimpleInference(prompt: String, isStreaming: Boolean) {
         val startTime = System.nanoTime()
@@ -229,46 +217,35 @@ class ChatRepository(
                 break
 
             } else {
-
-                // Let's create a map of simple IDs to tool names
                 val toolIdMap =
                     tools.values.mapIndexed { index, tool -> (index + 1).toString() to tool.name }
                         .toMap()
 
-// --- MODIFICATION START ---
                 var identifiedToolName: String? = null
 
-// First, check if the response is a valid ID
                 if (toolIdMap.containsKey(finalResponse)) {
                     identifiedToolName = toolIdMap[finalResponse]
                 } else {
-                    // If not, check if the response CONTAINS a tool name
-                    // This makes our parser more robust to the model's mistake
                     for (toolName in tools.keys) {
                         if (finalResponse.contains(toolName)) {
                             identifiedToolName = toolName
-                            break // Found a match, stop looking
+                            break
                         }
                     }
                 }
-// --- MODIFICATION END ---
-
-
                 if (identifiedToolName != null) {
                     // We found a tool call!
                     val tool = tools[identifiedToolName]!!
                     updateLastMessage("Tool Call: ${tool.name}")
                     updateLastMessageDuration(durationMs)
-                    updateLastMessage(identifiedToolName) // Show the tool call in the UI
+                    updateLastMessage(identifiedToolName)
                     Log.d("AgentDebug", "Tool Call Detected: $identifiedToolName")
-                    updateLastMessage("Tool Call: ${tool.name}") // Update UI
+                    updateLastMessage("Tool Call: ${tool.name}")
 
-                    val result = tool.execute(application, emptyMap()) // No args to pass
+                    val result = tool.execute(application, emptyMap())
                     addMessage(result, MessageType.TOOL_RESULT)
-                    addMessage("", MessageType.MODEL) // Placeholder for final answer
-                    // ... rest of the tool execution logic
+                    addMessage("", MessageType.MODEL)
                 } else {
-                    // No tool call detected, this is the final answer.
                     updateLastMessage(finalResponse)
                     updateLastMessageDuration(durationMs)
                     Log.d("AgentDebug", "No tool call detected. Model gave a direct answer.")
@@ -307,9 +284,6 @@ class ChatRepository(
             }
         }
     }
-
-    // --- Prompt Building and Utility Logic ---
-
     private fun detectModelFamily(path: String): ModelFamily {
         val lowerPath = path.lowercase()
         return when {
@@ -339,12 +313,10 @@ class ChatRepository(
     private fun buildGemma2Prompt(history: List<UiMessage>): String {
         val promptBuilder = StringBuilder()
 
-        // Let's create a map of simple IDs to tool names for parsing later
         val toolMap =
             tools.values.mapIndexed { index, tool -> (index + 1).toString() to tool.name }.toMap()
 
         val toolDescriptions = toolMap.entries.joinToString("\n") { (id, name) ->
-            // Get the original tool to access its description
             val tool = tools[name]
             "$id: ${tool?.name} - ${tool?.description}"
         }
@@ -363,13 +335,13 @@ EXAMPLE:
 user: What time is it?
 model:
 2
-    """.trimIndent() // The example now shows the model outputting just the number.
+    """.trimIndent()
 
         promptBuilder.append(systemInstruction)
         promptBuilder.append("\n\n**CONVERSATION:**\n")
 
         // Keep the history, but only the most recent turn might be needed.
-        val relevantHistory = history.takeLast(4) // Optimization: limit history size
+        val relevantHistory = history.takeLast(4)
         relevantHistory.forEach { message ->
             when (message.type) {
                 MessageType.USER -> promptBuilder.append("user: ${message.text}\n")
@@ -378,7 +350,6 @@ model:
                         promptBuilder.append("model: ${message.text}\n")
                     }
                 }
-                // We don't need tool results in this simplified prompt
                 MessageType.TOOL_RESULT, MessageType.SYSTEM -> {}
             }
         }
@@ -386,34 +357,20 @@ model:
         return promptBuilder.toString()
     }
 
-    // 2. Create the NEW function for the final answer
     private fun buildGemma2FinalAnswerPrompt(history: List<UiMessage>): String {
         val promptBuilder = StringBuilder()
-        val systemInstruction = """
-You are a helpful assistant.
-You have been given the result from a tool.
-Use the tool's result to answer the user's original question in a natural, conversational way.
+        val userQuestion = history.findLast { it.type == MessageType.USER }?.text ?: ""
+        val toolResult = history.findLast { it.type == MessageType.TOOL_RESULT }?.text ?: ""
+
+        val finalPrompt = """
+[INST] You are a helpful assistant. Given the following information, answer the user's question in a single, friendly sentence.
+
+Information: "$toolResult"
+
+User's Question: "$userQuestion" [/INST]
     """.trimIndent()
 
-        promptBuilder.append(systemInstruction)
-        promptBuilder.append("\n\n**CONVERSATION:**\n")
-
-        // In this prompt, we MUST include the TOOL_RESULT
-        history.forEach { message ->
-            when (message.type) {
-                MessageType.USER -> promptBuilder.append("user: ${message.text}\n")
-                MessageType.MODEL -> {
-                    // For the model's turn, we show the tool it decided to call
-                    if (message.text.isNotBlank() && message.text.startsWith("Tool Call:")) {
-                        promptBuilder.append("model: ${message.text}\n")
-                    }
-                }
-                // THIS IS THE CRITICAL CHANGE
-                MessageType.TOOL_RESULT -> promptBuilder.append("tool_result: ${message.text}\n")
-                MessageType.SYSTEM -> {}
-            }
-        }
-        promptBuilder.append("model:\n") // Ready for the model's final answer
+        promptBuilder.append(finalPrompt)
         return promptBuilder.toString()
     }
 
@@ -445,7 +402,7 @@ Use the tool's result to answer the user's original question in a natural, conve
     suspend fun cleanup() {
         try {
             llamaAndroid.unload()
-            loadedModelPath = null // Also clear the tracker here
+            loadedModelPath = null
             Log.d(tag, "LLamaAndroid resources unloaded successfully.")
         } catch (e: Exception) {
             Log.e(tag, "Error during LLamaAndroid unload", e)
