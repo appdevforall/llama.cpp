@@ -5,4 +5,4 @@ import kotlinx.serialization.Serializable
 
 @InternalSerializationApi
 @Serializable
-data class ToolCall(val name: String, val args: Map<String, String>)
+data class LocalLLMToolCall(val name: String, val args: Map<String, String>)

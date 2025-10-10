@@ -15,7 +15,7 @@ class UtilTest {
     @Test
     fun `parseToolCall with well-formed JSON returns correct ToolCall`() {
         val response = """<tool_call>{"tool_name": "get_current_datetime"}</tool_call>"""
-        val expected = ToolCall("get_current_datetime", emptyMap())
+        val expected = LocalLLMToolCall("get_current_datetime", emptyMap())
         val result = Util.parseToolCall(response, toolKeys)
         assertNotNull(result)
         assertEquals(expected, result)
@@ -25,7 +25,7 @@ class UtilTest {
     @Test
     fun `parseToolCall with JSON but no XML tags returns correct ToolCall`() {
         val response = """{"tool_name": "get_device_battery", "args": {}}"""
-        val expected = ToolCall("get_device_battery", emptyMap())
+        val expected = LocalLLMToolCall("get_device_battery", emptyMap())
         val result = Util.parseToolCall(response, toolKeys)
         assertNotNull(result)
         assertEquals(expected, result)
@@ -43,7 +43,7 @@ class UtilTest {
               And some trailing text.
             </tool_call>
         """.trimIndent()
-        val expected = ToolCall("get_current_datetime", emptyMap())
+        val expected = LocalLLMToolCall("get_current_datetime", emptyMap())
         val result = Util.parseToolCall(response, toolKeys)
         assertEquals(expected, result)
     }
@@ -55,7 +55,7 @@ class UtilTest {
     fun `parseToolCall with malformed JSON falls back to recovery and succeeds`() {
         // This JSON is missing a closing brace, so the primary parser will fail.
         val response = """<tool_call>{"tool_name": "get_device_battery", </tool_call>"""
-        val expected = ToolCall("get_device_battery", emptyMap())
+        val expected = LocalLLMToolCall("get_device_battery", emptyMap())
         val result = Util.parseToolCall(response, toolKeys)
 
         assertNotNull("The parser should have recovered the tool call", result)
@@ -67,7 +67,7 @@ class UtilTest {
     fun `parseToolCall with no JSON but a known tool name succeeds via recovery`() {
         val response =
             """<tool_call>I think I need to use the "get_current_datetime" tool.</tool_call>"""
-        val expected = ToolCall("get_current_datetime", emptyMap())
+        val expected = LocalLLMToolCall("get_current_datetime", emptyMap())
         val result = Util.parseToolCall(response, toolKeys)
         assertEquals(expected, result)
     }
@@ -89,7 +89,7 @@ class UtilTest {
         // IMPORTANT: The primary JSON parsing logic does NOT validate the tool name against the keys.
         // It only checks if the name is blank. This test confirms that behavior.
         val response = """<tool_call>{"tool_name": "make_sandwich"}</tool_call>"""
-        val expected = ToolCall("make_sandwich", emptyMap())
+        val expected = LocalLLMToolCall("make_sandwich", emptyMap())
         val result = Util.parseToolCall(response, toolKeys)
         assertEquals(
             "Should still parse valid JSON even if tool name is not in toolKeys",

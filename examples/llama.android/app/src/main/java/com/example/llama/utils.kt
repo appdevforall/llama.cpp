@@ -13,7 +13,7 @@ object Util {
     }
 
     @OptIn(InternalSerializationApi::class)
-    fun parseToolCall(responseText: String, toolKeys: Set<String>): ToolCall? {
+    fun parseToolCall(responseText: String, toolKeys: Set<String>): LocalLLMToolCall? {
         Log.d("ToolParse", "--- PARSER START ---")
         Log.d("ToolParse", "Input responseText: '$responseText'")
 
@@ -29,16 +29,16 @@ object Util {
 
         // 2. Try to decode the JSON string directly into our ToolCall data class.
         return try {
-            val toolCall = jsonParser.decodeFromString<ToolCall>(jsonString)
+            val localLLMToolCall = jsonParser.decodeFromString<LocalLLMToolCall>(jsonString)
 
             // 3. Validate that the tool name is one we actually support.
-            if (toolKeys.contains(toolCall.name)) {
-                Log.d("ToolParse", "SUCCESS: Parsed and validated tool call: $toolCall")
-                toolCall
+            if (toolKeys.contains(localLLMToolCall.name)) {
+                Log.d("ToolParse", "SUCCESS: Parsed and validated tool call: $localLLMToolCall")
+                localLLMToolCall
             } else {
                 Log.e(
                     "ToolParse",
-                    "FAILURE: Parsed tool name '${toolCall.name}' is not in the list of available tools."
+                    "FAILURE: Parsed tool name '${localLLMToolCall.name}' is not in the list of available tools."
                 )
                 null
             }
