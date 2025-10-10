@@ -246,11 +246,10 @@ class ChatRepository(
                 if (identifiedToolName != null) {
                     // We found a tool call!
                     val tool = tools[identifiedToolName]!!
+                    Log.d("AgentDebug", "Tool Call Detected: $identifiedToolName")
+
                     updateLastMessage("Tool Call: ${tool.name}")
                     updateLastMessageDuration(durationMs)
-                    updateLastMessage(identifiedToolName)
-                    Log.d("AgentDebug", "Tool Call Detected: $identifiedToolName")
-                    updateLastMessage("Tool Call: ${tool.name}")
 
                     val result = tool.execute(application, emptyMap())
                     addMessage(result, MessageType.TOOL_RESULT)
@@ -368,9 +367,10 @@ model:
     }
 
     private fun buildGemma2FinalAnswerPrompt(history: List<UiMessage>): String {
-        val promptBuilder = StringBuilder()
         val userQuestion = history.findLast { it.type == MessageType.USER }?.text ?: ""
-        val toolResult = history.findLast { it.type == MessageType.TOOL_RESULT }?.text ?: ""
+        val toolResult = (history.findLast { it.type == MessageType.TOOL_RESULT }?.text ?: "")
+            .replace("[Tool Result for get_current_datetime]:", "") // Keep this cleanup
+            .trim()
 
         val finalPrompt = """
 You are a helpful assistant.
@@ -382,8 +382,7 @@ Question: $userQuestion
 Answer:
     """.trimIndent()
 
-        promptBuilder.append(finalPrompt)
-        return promptBuilder.toString()
+        return finalPrompt
     }
 
     private fun buildLlama3Prompt(history: List<UiMessage>): String {

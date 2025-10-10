@@ -14,8 +14,10 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 
@@ -128,35 +130,69 @@ class ChatRepositoryTest {
     }
 
     @Test
-    fun `sendMessage with valid tool call updates messages with tool results`() = runTest {
-        // Arrange
+    fun `sendMessage with valid tool call follows two-step prompt logic`() = runTest {
+        // --- Arrange ---
         val userInput = "What is the time?"
-        // This tool is hardcoded in the ChatRepository implementation
         val toolName = "get_current_datetime"
-        val modelResponseWithToolCall = """<tool_call>{"tool_name": "$toolName"}</tool_call>"""
+        val firstModelResponse = "2"
+        val finalAnswer = "The current time is 7:14 PM."
 
-        // Mock the sequence of model responses.
-        // 1. First call returns the tool call.
-        // 2. Second call (after tool execution) returns the final answer.
+        val promptCaptor = argumentCaptor<String>()
+        val stopStringsCaptor = argumentCaptor<List<String>>()
+
         whenever(mockLlamaAndroid.send(any(), any(), any(), any()))
-            .doReturn(flowOf(modelResponseWithToolCall)) // First response
-            .doReturn(flowOf("It is currently Thursday, October 9, 2025 at 3:51 PM.")) // Second response
+            .doReturn(flowOf(firstModelResponse))
+            .doReturn(flowOf(finalAnswer))
 
-        // Act
+        ChatRepository::class.java.getDeclaredField("currentModelFamily").apply {
+            isAccessible = true
+            set(repository, ModelFamily.GEMMA2)
+        }
+
         repository.sendMessage(userInput, isStreaming = false, isToolUseEnabled = true)
 
-        // Assert
+        verify(mockLlamaAndroid, times(2)).send(
+            promptCaptor.capture(),
+            any(),
+            stopStringsCaptor.capture(),
+            any()
+        )
+
+        val firstPrompt = promptCaptor.firstValue
+        val firstStopStrings = stopStringsCaptor.firstValue
+        assertTrue(
+            "First prompt must be for tool selection",
+            firstPrompt.contains("[AVAILABLE_TOOLS]")
+        )
+        assertEquals("First call should stop on newline", listOf("\n"), firstStopStrings)
+
+        val secondPrompt = promptCaptor.secondValue
+        val secondStopStrings = stopStringsCaptor.secondValue
+
+        assertTrue(
+            "Second prompt must contain 'Information:'",
+            secondPrompt.contains("Information:")
+        )
+        // Assert against the correct literal string "Question:"
+        assertTrue("Second prompt must contain 'Question:'", secondPrompt.contains("Question:"))
+        // Assert against the correct stop strings for this turn
+        assertEquals(
+            "Second call should use Question stop string",
+            listOf("Question:", "\n\n"),
+            secondStopStrings
+        )
+
         val finalMessages = repository.messages.value
-        // Expected sequence:
-        // 0. Initial Message (Model)
-        // 1. User Input (User)
-        // 2. Tool Call String (Model)
-        // 3. Tool Result (Tool Result)
-        // 4. Final Answer (Model)
-        assertEquals("Expected 5 messages after a successful tool call loop", 5, finalMessages.size)
-        assertTrue(finalMessages[2].text.contains(toolName))
-        assertEquals(MessageType.TOOL_RESULT, finalMessages[3].type)
-        assertTrue(finalMessages[4].text.contains("Thursday, October 9"))
+        // Expected sequence is now simpler because we are not calling loadModel()
+        // 0. User Input
+        // 1. Model's "Tool Call: ..." message
+        // 2. Tool Result message
+        // 3. Final Answer message from the model
+        assertEquals("Expected 4 messages after a successful tool call loop", 4, finalMessages.size)
+        assertEquals(MessageType.USER, finalMessages[0].type)
+        assertTrue(finalMessages[1].text.contains("Tool Call: $toolName"))
+        assertEquals(MessageType.TOOL_RESULT, finalMessages[2].type)
+        assertEquals(finalAnswer, finalMessages[3].text)
     }
 
     @Test
