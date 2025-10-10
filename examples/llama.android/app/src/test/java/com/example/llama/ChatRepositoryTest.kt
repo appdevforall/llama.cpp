@@ -256,4 +256,49 @@ class ChatRepositoryTest {
         assertEquals(modelDirectAnswer, modelMessage.text)
         assertEquals(MessageType.MODEL, modelMessage.type)
     }
+
+    @Test
+    fun `sendMessage with open question should answer directly without using tools`() = runTest {
+        // --- Arrange ---
+        val userInput = "What is the capital of France?"
+        val expectedModelAnswer = "The capital of France is Paris."
+
+        // 1. Set the model family to ensure the tool-selection prompt is built correctly.
+        ChatRepository::class.java.getDeclaredField("currentModelFamily").apply {
+            isAccessible = true
+            set(repository, ModelFamily.GEMMA2)
+        }
+
+        // 2. Mock the model's response. For this open question, the model should
+        //    not return a tool ID ("1" or "2"), but instead answer directly.
+        whenever(mockLlamaAndroid.send(any(), any(), any(), any())) doReturn flowOf(
+            expectedModelAnswer
+        )
+
+        // --- Act ---
+        // We call sendMessage with `isToolUseEnabled = true` to specifically test
+        // that the agent loop correctly handles this case.
+        repository.sendMessage(userInput, isStreaming = false, isToolUseEnabled = true)
+
+        // --- Assert ---
+        // 1. CRITICAL: Verify that `send` was called only ONCE.
+        // This proves the agent loop saw the direct answer, updated the message,
+        // and then correctly broke out of the loop without trying a second turn.
+        verify(mockLlamaAndroid, times(1)).send(any(), any(), any(), any())
+
+        // 2. Assert the final state of the messages.
+        val finalMessages = repository.messages.value
+        // We expect only two messages: the user's input and the model's direct answer.
+        assertEquals("Expected 2 messages for a direct answer", 2, finalMessages.size)
+
+        // 3. Verify the content of the messages.
+        val userMessage = finalMessages[0]
+        val modelMessage = finalMessages[1]
+
+        assertEquals(userInput, userMessage.text)
+        assertEquals(MessageType.USER, userMessage.type)
+
+        assertEquals(expectedModelAnswer, modelMessage.text)
+        assertEquals(MessageType.MODEL, modelMessage.type)
+    }
 }
