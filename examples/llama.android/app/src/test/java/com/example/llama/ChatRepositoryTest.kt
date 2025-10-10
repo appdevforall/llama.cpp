@@ -52,29 +52,47 @@ class ChatRepositoryTest {
     }
 
     @Test
-    fun `sendMessage adds user and placeholder messages immediately`() = runTest {
+    fun `sendMessage with tool use disabled runs simple inference and updates messages`() =
+        runTest {
         // Arrange
         val userInput = "Hello, world!"
+            val modelResponse = "This is a simple response."
 
-        // FIX 1: The code under test calls the single-argument `send(prompt)` method when
-        // `isToolUseEnabled` is false. The previous mock was for a 4-argument version.
-        // This ensures we mock the correct method overload.
-        whenever(mockLlamaAndroid.send(any(), any(), any(), any())) doReturn flowOf("Response")
+            // Mock the send call that will be triggered by runSimpleInference
+            whenever(mockLlamaAndroid.send(any(), any(), any(), any())) doReturn flowOf(
+                modelResponse
+            )
+
+            // Set the model family to ensure the correct prompt builder is used
+            ChatRepository::class.java.getDeclaredField("currentModelFamily").apply {
+                isAccessible = true
+                set(repository, ModelFamily.GEMMA2)
+            }
 
         // Act
         repository.sendMessage(userInput, isStreaming = false, isToolUseEnabled = false)
 
         // Assert
-        val messages = repository.messages.value
-        assertEquals("Should have 2 messages: user, and final response", 2, messages.size)
-        assertEquals(userInput, messages[1].text)
-        assertEquals(MessageType.USER, messages[1].type)
+            val finalMessages = repository.messages.value
 
-        assertEquals("Response", messages[2].text)
-        assertEquals(MessageType.MODEL, messages[2].type)
+            // 1. The final list should have exactly two messages.
+            assertEquals(
+                "Should have 2 final messages: user and model response",
+                2,
+                finalMessages.size
+            )
+
+            // 2. Check the first message (index 0) - This should be the user's input.
+            val userMessage = finalMessages[0]
+            assertEquals(userInput, userMessage.text)
+            assertEquals(MessageType.USER, userMessage.type)
+
+            // 3. Check the second message (index 1) - This should be the final model response.
+            val modelMessage = finalMessages[1]
+            assertEquals(modelResponse, modelMessage.text)
+            assertEquals(MessageType.MODEL, modelMessage.type)
     }
 
-    // ... (the rest of your tests in this file are fine) ...
     @Test
     fun `loadModel success updates messages with system logs`() = runTest {
         // Arrange
@@ -196,32 +214,46 @@ class ChatRepositoryTest {
     }
 
     @Test
-    fun `sendMessage with unknown tool call updates message with error`() = runTest {
-        // Arrange
+    fun `sendMessage when model does not select a tool should display direct answer`() = runTest {
+        // --- Arrange ---
         val userInput = "Make me a sandwich"
-        val unknownToolName = "make_sandwich"
-        val modelResponseWithUnknownTool =
-            """<tool_call>{"tool_name": "$unknownToolName"}</tool_call>"""
-        val expectedErrorMessage = "Error: Model tried to call unknown tool '$unknownToolName'"
+        // In our new logic, the model won't invent a tool. It will just fail to provide
+        // a valid ID (like "1" or "2") and give a text answer instead.
+        val modelDirectAnswer = "I am an AI and cannot make a physical sandwich."
 
-        // Mock the model to return the unknown tool call
+        // Set the model family to ensure the correct prompt is built
+        ChatRepository::class.java.getDeclaredField("currentModelFamily").apply {
+            isAccessible = true
+            set(repository, ModelFamily.GEMMA2)
+        }
+
+        // Mock the model to return a direct answer instead of a tool ID
         whenever(mockLlamaAndroid.send(any(), any(), any(), any())) doReturn flowOf(
-            modelResponseWithUnknownTool
+            modelDirectAnswer
         )
 
-        // Act
+        // --- Act ---
         repository.sendMessage(userInput, isStreaming = false, isToolUseEnabled = true)
 
-        // Assert
+        // --- Assert ---
+        // 1. Verify that `send` was called only ONCE, because the agent loop should
+        //    break immediately when it doesn't get a valid tool identifier.
+        verify(mockLlamaAndroid, times(1)).send(any(), any(), any(), any())
+
+        // 2. Assert the final state of the messages
         val finalMessages = repository.messages.value
-        // Initial Message, User Message, and the final updated Model message with the error
-        assertEquals("Expected 3 messages after an unknown tool call", 3, finalMessages.size)
-        val lastMessage = finalMessages.last()
-        assertEquals(MessageType.MODEL, lastMessage.type)
-        assertEquals(
-            "Last message should contain the unknown tool error",
-            expectedErrorMessage,
-            lastMessage.text
-        )
+        // Expected sequence:
+        // 0. User Input
+        // 1. Final Model Message (which is the direct answer)
+        assertEquals("Expected 2 messages after a direct answer", 2, finalMessages.size)
+
+        val userMessage = finalMessages[0]
+        val modelMessage = finalMessages[1]
+
+        assertEquals(userInput, userMessage.text)
+        assertEquals(MessageType.USER, userMessage.type)
+
+        assertEquals(modelDirectAnswer, modelMessage.text)
+        assertEquals(MessageType.MODEL, modelMessage.type)
     }
 }
