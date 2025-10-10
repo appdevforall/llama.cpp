@@ -64,13 +64,10 @@ class ChatRepositoryTest {
 
         // Assert
         val messages = repository.messages.value
-        assertEquals("Should have 3 messages: initial, user, and final response", 3, messages.size)
+        assertEquals("Should have 2 messages: user, and final response", 2, messages.size)
         assertEquals(userInput, messages[1].text)
         assertEquals(MessageType.USER, messages[1].type)
 
-        // FIX 2: The `runTest` block executes the entire `sendMessage` function synchronously.
-        // This means the placeholder "..." is added and then immediately replaced by the
-        // mocked model output ("Response"). We must assert the final state.
         assertEquals("Response", messages[2].text)
         assertEquals(MessageType.MODEL, messages[2].type)
     }
@@ -110,7 +107,7 @@ class ChatRepositoryTest {
         val modelResponseChunks = listOf("Why ", "did the ", "scarecrow ", "win an award?")
         val expectedFullResponse = "Why did the scarecrow win an award?"
 
-        // We need to mock the single-argument version of send for simple inference
+        // Mock the `send` method that will be called by `runSimpleInference`
         whenever(
             mockLlamaAndroid.send(
                 any(),
@@ -125,8 +122,7 @@ class ChatRepositoryTest {
 
         // Assert
         val finalMessages = repository.messages.value
-        // Initial, User, Final Model Response
-        assertEquals(3, finalMessages.size)
+        assertEquals(2, finalMessages.size) // User message, Final Model Response
         assertEquals(expectedFullResponse, finalMessages.last().text)
         assertEquals(MessageType.MODEL, finalMessages.last().type)
     }
