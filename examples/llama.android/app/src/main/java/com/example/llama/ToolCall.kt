@@ -1,3 +1,8 @@
 package com.example.llama
 
-data class ToolCall(val toolName: String, val args: Map<String, Any>)
+import kotlinx.serialization.InternalSerializationApi
+import kotlinx.serialization.Serializable
+
+@InternalSerializationApi
+@Serializable
+data class ToolCall(val name: String, val args: Map<String, String>)

@@ -346,4 +346,82 @@ class ChatRepositoryTest {
         assertEquals(expectedModelAnswer, modelMessage.text)
         assertEquals(MessageType.MODEL, modelMessage.type)
     }
+
+    @Test
+    fun `sendMessage with tool requiring argument executes tool correctly`() = runTest {
+        // --- Arrange ---
+        val userInput = "What's the weather like in Paris?"
+        val expectedToolName = "get_weather"
+        val expectedCity = "Paris"
+
+        // This is the structured JSON we now expect from the model
+        val modelToolCallResponse =
+            """<tool_call>{"name": "$expectedToolName", "args": {"city": "$expectedCity"}}</tool_call>"""
+        val expectedFinalAnswer = "The weather in Paris is sunny and 25°C."
+
+        // Set up the two-step model response
+        whenever(mockLlamaAndroid.send(any(), any(), any(), any()))
+            .doReturn(flowOf(modelToolCallResponse)) // 1. First, it returns the tool call.
+            .doReturn(flowOf(expectedFinalAnswer))   // 2. Second, it returns the final answer.
+
+        // Set the model family to trigger the correct prompt builder
+        ChatRepository::class.java.getDeclaredField("currentModelFamily").apply {
+            isAccessible = true
+            set(repository, ModelFamily.GEMMA2)
+        }
+
+        // We need ArgumentCaptors to inspect what was sent to the model
+        val promptCaptor = argumentCaptor<String>()
+        val stopStringsCaptor = argumentCaptor<List<String>>()
+
+        // --- Act ---
+        repository.sendMessage(userInput, isStreaming = false, isToolUseEnabled = true)
+
+        // --- Assert ---
+        // 1. Verify the model was called twice
+        verify(mockLlamaAndroid, times(2)).send(
+            promptCaptor.capture(),
+            any(),
+            stopStringsCaptor.capture(),
+            any()
+        )
+
+        // 2. Verify the first call (Tool Selection)
+        val firstPrompt = promptCaptor.firstValue
+        val firstStopStrings = stopStringsCaptor.firstValue
+        assertTrue(
+            "First prompt must contain tool descriptions",
+            firstPrompt.contains("get_weather")
+        )
+        assertEquals(
+            "First call should stop on </tool_call>",
+            listOf("</tool_call>"),
+            firstStopStrings
+        )
+
+        // 3. Verify the second call (Final Answer)
+        val secondPrompt = promptCaptor.secondValue
+        assertTrue(
+            "Second prompt must contain the weather info",
+            secondPrompt.contains("sunny and 25°C")
+        )
+        assertTrue(
+            "Second prompt must contain the user's original question",
+            secondPrompt.contains(userInput)
+        )
+
+        // 4. Verify the final chat history
+        val finalMessages = repository.messages.value
+        assertEquals(4, finalMessages.size)
+        assertEquals(userInput, finalMessages[0].text)
+        assertTrue(
+            "UI should show the tool call",
+            finalMessages[1].text.contains("Tool Call: get_weather(city=Paris)")
+        )
+        assertTrue(
+            "UI should show the tool result",
+            finalMessages[2].text.contains("The weather in Paris is sunny")
+        )
+        assertEquals(expectedFinalAnswer, finalMessages[3].text)
+    }
 }

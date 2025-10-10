@@ -1,83 +1,62 @@
 package com.example.llama
 
 import android.util.Log
+import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import java.util.regex.Pattern
 
 object Util {
 
+    // Define a lenient JSON parser instance
+    private val jsonParser = Json {
+        isLenient = true
+        ignoreUnknownKeys = true
+    }
+
+    @OptIn(InternalSerializationApi::class)
     fun parseToolCall(responseText: String, toolKeys: Set<String>): ToolCall? {
-        println("--- PARSER START ---")
-        println("Input responseText: '$responseText'")
+        Log.d("ToolParse", "--- PARSER START ---")
+        Log.d("ToolParse", "Input responseText: '$responseText'")
+
+        // 1. Find the JSON string within the response.
+        // This handles cases where the model wraps the JSON in markdown (```json ... ```)
+        // or the required <tool_call> tags.
         val jsonString = findPotentialJsonObjectString(responseText)
-        println("findPotentialJsonObjectString returned: '$jsonString'")
-        if (jsonString != null) {
-            val toolCallFromJson = parseJsonObjectToToolCall(jsonString)
-            println("parseJsonObjectToToolCall returned: $toolCallFromJson")
-            if (toolCallFromJson != null) {
-                println("SUCCESS: Returning valid tool call from JSON.")
-                return toolCallFromJson
-            }
+        Log.d("ToolParse", "Extracted JSON string: '$jsonString'")
+        if (jsonString == null) {
+            Log.e("ToolParse", "No potential JSON object found in the response.")
+            return null
         }
 
-        Log.e("TOOL_DEBUG", "FAILURE: Falling back to recovery or returning null.")
-        val tagContent =
-            responseText.substringAfter("<tool_call>", "").substringBefore("</tool_call>").trim()
-        if (tagContent.isNotBlank()) {
-            for (toolName in toolKeys) {
-                if (tagContent.contains("\"$toolName\"")) { // Be more specific to avoid accidental matches
-                    println(
-                        "RECOVERY SUCCESS: Found tool name '$toolName' in malformed output."
-                    )
-                    return ToolCall(toolName, emptyMap())
-                }
-            }
-        }
+        // 2. Try to decode the JSON string directly into our ToolCall data class.
+        return try {
+            val toolCall = jsonParser.decodeFromString<ToolCall>(jsonString)
 
-        Log.e("ToolParse", "RECOVERY FAILED: No valid JSON or known tool name found in response.")
-        return null
+            // 3. Validate that the tool name is one we actually support.
+            if (toolKeys.contains(toolCall.name)) {
+                Log.d("ToolParse", "SUCCESS: Parsed and validated tool call: $toolCall")
+                toolCall
+            } else {
+                Log.e(
+                    "ToolParse",
+                    "FAILURE: Parsed tool name '${toolCall.name}' is not in the list of available tools."
+                )
+                null
+            }
+        } catch (e: Exception) {
+            Log.e("ToolParse", "FAILURE: kotlinx.serialization failed to parse JSON: ${e.message}")
+            null
+        }
     }
 
     private fun findPotentialJsonObjectString(responseText: String): String? {
-        val tagPattern = Pattern.compile("<tool_call>(.*?)</tool_call>", Pattern.DOTALL)
-        val tagMatcher = tagPattern.matcher(responseText)
-        val candidateString = if (tagMatcher.find()) {
-            tagMatcher.group(1) ?: ""
-        } else {
-            responseText
-        }
-        val firstBraceIndex = candidateString.indexOf('{')
-        val lastBraceIndex = candidateString.lastIndexOf('}')
+        // This function is now simpler. It just looks for the content between the first '{' and the last '}'.
+        // This is robust enough to handle markdown code blocks or raw JSON output.
+        val firstBraceIndex = responseText.indexOf('{')
+        val lastBraceIndex = responseText.lastIndexOf('}')
+
         if (firstBraceIndex != -1 && lastBraceIndex != -1 && firstBraceIndex < lastBraceIndex) {
-            return candidateString.substring(firstBraceIndex, lastBraceIndex + 1)
+            return responseText.substring(firstBraceIndex, lastBraceIndex + 1)
         }
         return null
-    }
-
-    private val jsonParser = Json { isLenient = true; ignoreUnknownKeys = true }
-
-    private fun parseJsonObjectToToolCall(jsonStr: String): ToolCall? {
-        return try {
-            // Use the new parser to create a generic JSON element
-            val jsonElement = jsonParser.parseToJsonElement(jsonStr)
-
-            // Safely access the "tool_name" property
-            val toolName = jsonElement.jsonObject["tool_name"]?.jsonPrimitive?.content ?: ""
-
-            if (toolName.isBlank()) {
-                return null
-            }
-
-            // Since the 'args' are always empty in our tests, we can simplify this for now.
-            val argsMap = emptyMap<String, Any>()
-
-            ToolCall(toolName, argsMap)
-        } catch (e: Exception) {
-            // Catch any parsing exceptions from the new library
-            println("TOOL_DEBUG: Kotlinx Serialization failed to parse JSON: ${e.message}")
-            null
-        }
     }
 }

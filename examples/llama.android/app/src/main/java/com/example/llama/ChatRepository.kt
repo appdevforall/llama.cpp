@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.reduce
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.InternalSerializationApi
 import java.util.concurrent.atomic.AtomicLong
 
 private const val SYSTEM_PROMPT = """
@@ -38,7 +39,8 @@ class ChatRepository(
 
     private val tools: Map<String, Tool> = listOf(
         BatteryTool(),
-        GetDateTimeTool()
+        GetDateTimeTool(),
+        GetWeatherTool()
     ).associateBy { it.name }
 
     private var currentModelFamily: ModelFamily = ModelFamily.UNKNOWN
@@ -147,11 +149,11 @@ class ChatRepository(
 
     fun clear() {
         _messages.value = listOf(
-            UiMessage(
-                id = messageIdCounter.getAndIncrement(),
-                text = "Hello! How can I help you today?",
-                type = MessageType.MODEL
-            )
+//            UiMessage(
+//                id = messageIdCounter.getAndIncrement(),
+//                text = "Hello! How can I help you today?",
+//                type = MessageType.MODEL
+//            )
         )
     }
 
@@ -179,19 +181,22 @@ class ChatRepository(
         }
     }
 
+    @OptIn(InternalSerializationApi::class)
     private suspend fun runAgentLoop(maxTurns: Int = 5) {
         var currentTurn = 0
-
         while (currentTurn < maxTurns) {
             Log.d("AgentDebug", "--- [Step ${currentTurn + 1}] ---")
             val currentHistory = _messages.value
             val isFinalAnswerTurn =
                 currentHistory.getOrNull(currentHistory.size - 2)?.type == MessageType.TOOL_RESULT
 
+            // 2. UPDATE THE STOP STRINGS
             val stopStrings = if (isFinalAnswerTurn) {
+                // For the final answer, stop before the model hallucinates a new question.
                 listOf("Question:", "\n\n")
             } else {
-                listOf("\n")
+                // For tool selection, we now expect a structured XML tag.
+                listOf("</tool_call>")
             }
 
             val fullPromptHistory = buildPromptWithHistory(currentHistory, isFinalAnswerTurn)
@@ -209,7 +214,7 @@ class ChatRepository(
             }
             val durationMs = (System.nanoTime() - startTime) / 1_000_000
 
-            val finalResponse = modelResponse.trim() // Trim whitespace
+            val finalResponse = modelResponse.split(stopStrings.first()).first()
             Log.d("AgentDebug", "Raw Model Result: \"$modelResponse\"")
             Log.d("AgentDebug", "Trimmed Final Result: \"$finalResponse\"")
 
@@ -227,31 +232,35 @@ class ChatRepository(
                 updateLastMessageDuration(durationMs)
                 break
             } else {
-                val toolIdMap =
-                    tools.values.mapIndexed { index, tool -> (index + 1).toString() to tool.name }
-                        .toMap()
+                val toolCall = Util.parseToolCall(finalResponse, tools.keys)
 
-                var identifiedToolName: String? = null
+                if (toolCall != null) {
+                    val tool = tools[toolCall.name]
+                    if (tool != null) {
+                        Log.d(
+                            "AgentDebug",
+                            "Tool Call Detected: ${toolCall.name} with args: ${toolCall.args}"
+                        )
+                        // Display a user-friendly version of the tool call
+                        updateLastMessage(
+                            "Tool Call: ${toolCall.name}(${
+                                toolCall.args.map { "${it.key}=${it.value}" }.joinToString()
+                            })"
+                        )
+                        updateLastMessageDuration(durationMs)
 
-                if (toolIdMap.containsKey(finalResponse)) {
-                    identifiedToolName = toolIdMap[finalResponse]
-                } else {
-                    if (tools.containsKey(finalResponse)) {
-                        identifiedToolName = finalResponse
+                        // Execute the tool with the parsed arguments
+                        val result = tool.execute(application, toolCall.args)
+                        addMessage(result, MessageType.TOOL_RESULT)
+                        addMessage("", MessageType.MODEL)
+                    } else {
+                        // This handles the case where the model hallucinates a tool name.
+                        val errorMsg = "Error: Model tried to call unknown tool '${toolCall.name}'"
+                        updateLastMessage(errorMsg)
+                        break
                     }
-                }
-                if (identifiedToolName != null) {
-                    // We found a tool call!
-                    val tool = tools[identifiedToolName]!!
-                    Log.d("AgentDebug", "Tool Call Detected: $identifiedToolName")
-
-                    updateLastMessage("Tool Call: ${tool.name}")
-                    updateLastMessageDuration(durationMs)
-
-                    val result = tool.execute(application, emptyMap())
-                    addMessage(result, MessageType.TOOL_RESULT)
-                    addMessage("", MessageType.MODEL)
                 } else {
+                    // No tool call detected, this is a direct answer.
                     updateLastMessage(finalResponse)
                     updateLastMessageDuration(durationMs)
                     Log.d("AgentDebug", "No tool call detected. Model gave a direct answer.")
@@ -317,50 +326,61 @@ class ChatRepository(
     }
 
     private fun buildGemma2Prompt(history: List<UiMessage>): String {
-        val promptBuilder = StringBuilder()
+        // Find if the last message was a tool result to decide which prompt to use
+        val isFinalAnswerTurn = history.lastOrNull()?.type == MessageType.MODEL &&
+            history.getOrNull(history.size - 2)?.type == MessageType.TOOL_RESULT
 
-        val toolMap =
-            tools.values.mapIndexed { index, tool -> (index + 1).toString() to tool.name }.toMap()
+        if (isFinalAnswerTurn) {
+            // If it's the final answer turn, use the simple synthesis prompt
+            val userQuestion = history.findLast { it.type == MessageType.USER }?.text ?: ""
+            val toolResult = (history.findLast { it.type == MessageType.TOOL_RESULT }?.text ?: "")
+                .replace(Regex("\\[Tool Result for [a-zA-Z_]+]:"), "")
+                .trim()
 
-        val toolDescriptions = toolMap.entries.joinToString("\n") { (id, name) ->
-            val tool = tools[name]
-            "$id: ${tool?.name} - ${tool?.description}"
-        }
-
-        val systemInstruction = """
+            return """
 You are a helpful assistant.
-Analyze the user's question and determine if one of the following tools can help.
-If no tool is needed, answer the question directly.
-If a tool is needed, you MUST respond with ONLY the tool's ID number on a new line, and nothing else.
+Use the following information to answer the user's question in a single, friendly sentence.
 
-[AVAILABLE_TOOLS]
-$toolDescriptions
-[END_TOOLS]
+Information: $toolResult
+Question: $userQuestion
+Answer:
+            """.trimIndent()
+        } else {
+            // Otherwise, build the full tool-selection prompt
+            val promptBuilder = StringBuilder()
+            val toolsAsJson = tools.values.joinToString(",\n") { tool ->
+                """  { "name": "${tool.name}", "description": "${
+                    tool.description.replace(
+                        "\"",
+                        "\\\""
+                    )
+                }" }"""
+            }
+
+            val systemInstruction = """
+You are a helpful assistant with access to the following tools:
+[$toolsAsJson]
+
+To use a tool, respond with a single `<tool_call>` XML tag containing a JSON object with the tool's 'name' and 'args'.
+If no tool is needed, answer the user's question directly.
 
 EXAMPLE:
-user: What time is it?
-model:
-2
-    """.trimIndent()
+user: What is the weather like in Paris?
+model: <tool_call>{"name": "get_weather", "args": {"city": "Paris"}}</tool_call>
+            """.trimIndent()
 
-        promptBuilder.append(systemInstruction)
-        promptBuilder.append("\n\n**CONVERSATION:**\n")
-
-        // Keep the history, but only the most recent turn might be needed.
-        val relevantHistory = history.takeLast(4)
-        relevantHistory.forEach { message ->
-            when (message.type) {
-                MessageType.USER -> promptBuilder.append("user: ${message.text}\n")
-                MessageType.MODEL -> {
-                    if (message.text.isNotBlank()) {
-                        promptBuilder.append("model: ${message.text}\n")
-                    }
+            promptBuilder.append(systemInstruction)
+            promptBuilder.append("\n\n**CONVERSATION:**\n")
+            history.takeLast(4).forEach { message ->
+                when (message.type) {
+                    MessageType.USER -> promptBuilder.append("user: ${message.text}\n")
+                    MessageType.MODEL -> if (message.text.isNotBlank()) promptBuilder.append("model: ${message.text}\n")
+                    else -> {}
                 }
-                MessageType.TOOL_RESULT, MessageType.SYSTEM -> {}
             }
+            promptBuilder.append("model: ")
+            return promptBuilder.toString()
         }
-        promptBuilder.append("model:\n") // Ready for the model's response
-        return promptBuilder.toString()
     }
 
     private fun buildGemma2FinalAnswerPrompt(history: List<UiMessage>): String {
