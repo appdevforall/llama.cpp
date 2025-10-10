@@ -185,11 +185,14 @@ class ChatRepository(
         while (currentTurn < maxTurns) {
             Log.d("AgentDebug", "--- [Step ${currentTurn + 1}] ---")
             val currentHistory = _messages.value
-            // Determine if this turn is for generating the final answer
             val isFinalAnswerTurn =
                 currentHistory.getOrNull(currentHistory.size - 2)?.type == MessageType.TOOL_RESULT
 
-            val stopStrings = listOf("\n")
+            val stopStrings = if (isFinalAnswerTurn) {
+                listOf("[INST]", "[SL]")
+            } else {
+                listOf("\n")
+            }
 
             val fullPromptHistory = buildPromptWithHistory(currentHistory, isFinalAnswerTurn)
             Log.d("AgentDebug", "Final Prompt Sent:\n$fullPromptHistory")
@@ -368,6 +371,7 @@ model:
 Information: "$toolResult"
 
 User's Question: "$userQuestion" [/INST]
+Answer:
     """.trimIndent()
 
         promptBuilder.append(finalPrompt)
