@@ -301,4 +301,49 @@ class ChatRepositoryTest {
         assertEquals(expectedModelAnswer, modelMessage.text)
         assertEquals(MessageType.MODEL, modelMessage.type)
     }
+
+    @Test
+    fun `sendMessage when asked for available tools should list them directly`() = runTest {
+        // --- Arrange ---
+        val userInput = "What tools can you use?"
+        // This is the ideal, conversational answer we expect from the model.
+        // It contains the tool names, which would have fooled our old parser.
+        val expectedModelAnswer =
+            "I can use the following tools: get_device_battery and get_current_datetime."
+
+        // 1. Set the model family to ensure the tool-selection prompt is built.
+        ChatRepository::class.java.getDeclaredField("currentModelFamily").apply {
+            isAccessible = true
+            set(repository, ModelFamily.GEMMA2)
+        }
+
+        // 2. Mock the model to return this direct, conversational answer.
+        whenever(mockLlamaAndroid.send(any(), any(), any(), any())) doReturn flowOf(
+            expectedModelAnswer
+        )
+
+        // --- Act ---
+        // We must enable tool use to test that the agent *chooses not* to use a tool.
+        repository.sendMessage(userInput, isStreaming = false, isToolUseEnabled = true)
+
+        // --- Assert ---
+        // 1. Verify that `send` was called only ONCE.
+        // This proves our improved parser correctly identified the response as a direct answer
+        // and broke the loop, instead of incorrectly triggering a tool.
+        verify(mockLlamaAndroid, times(1)).send(any(), any(), any(), any())
+
+        // 2. Assert the final message list.
+        val finalMessages = repository.messages.value
+        assertEquals("Expected 2 messages for a direct answer", 2, finalMessages.size)
+
+        // 3. Verify the message content.
+        val userMessage = finalMessages[0]
+        val modelMessage = finalMessages[1]
+
+        assertEquals(userInput, userMessage.text)
+        assertEquals(MessageType.USER, userMessage.type)
+
+        assertEquals(expectedModelAnswer, modelMessage.text)
+        assertEquals(MessageType.MODEL, modelMessage.type)
+    }
 }

@@ -236,11 +236,8 @@ class ChatRepository(
                 if (toolIdMap.containsKey(finalResponse)) {
                     identifiedToolName = toolIdMap[finalResponse]
                 } else {
-                    for (toolName in tools.keys) {
-                        if (finalResponse.contains(toolName)) {
-                            identifiedToolName = toolName
-                            break
-                        }
+                    if (tools.containsKey(finalResponse)) {
+                        identifiedToolName = finalResponse
                     }
                 }
                 if (identifiedToolName != null) {
