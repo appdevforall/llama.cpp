@@ -189,7 +189,7 @@ class ChatRepository(
                 currentHistory.getOrNull(currentHistory.size - 2)?.type == MessageType.TOOL_RESULT
 
             val stopStrings = if (isFinalAnswerTurn) {
-                listOf("[INST]", "[SL]")
+                listOf("Question:", "\n\n")
             } else {
                 listOf("\n")
             }
@@ -214,11 +214,18 @@ class ChatRepository(
             Log.d("AgentDebug", "Trimmed Final Result: \"$finalResponse\"")
 
             if (isFinalAnswerTurn) {
-                updateLastMessage(finalResponse)
+                var cleanResponse = finalResponse
+                for (stopWord in stopStrings) {
+                    if (cleanResponse.contains(stopWord)) {
+                        // Take only the text *before* the first occurrence of a stop word
+                        cleanResponse = cleanResponse.substringBefore(stopWord).trim()
+                    }
+                }
+                updateLastMessage(cleanResponse)
+
                 Log.d("AgentDebug", "Final answer received. Concluding.")
                 updateLastMessageDuration(durationMs)
                 break
-
             } else {
                 val toolIdMap =
                     tools.values.mapIndexed { index, tool -> (index + 1).toString() to tool.name }
@@ -366,11 +373,12 @@ model:
         val toolResult = history.findLast { it.type == MessageType.TOOL_RESULT }?.text ?: ""
 
         val finalPrompt = """
-[INST] You are a helpful assistant. Given the following information, answer the user's question in a single, friendly sentence.
+You are a helpful assistant.
+Use the following information to answer the user's question.
+Answer in a single, friendly sentence.
 
-Information: "$toolResult"
-
-User's Question: "$userQuestion" [/INST]
+Information: $toolResult
+Question: $userQuestion
 Answer:
     """.trimIndent()
 
