@@ -29,7 +29,7 @@ private const val SYSTEM_PROMPT = """
  * The single source of truth for chat data and business logic.
  * This class manages the conversation state and all interactions with LLamaAndroid.
  */
-class ChatRepository(
+class LocalLlmRepositoryImpl(
     private val application: Application,
     private val llamaAndroid: LLamaAndroid,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO

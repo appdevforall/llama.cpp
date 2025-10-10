@@ -29,13 +29,13 @@ const val PREFS_NAME = "LlamaPrefs"
  * between the UI and the data/domain layers.
  */
 class MainViewModel(
-    private val chatRepository: ChatRepository,
+    private val localLlmRepositoryImpl: LocalLlmRepositoryImpl,
 ) : ViewModel() {
 
     // --- State Exposure ---
 
     // Exposes the conversation history from the repository for the UI to observe.
-    val uiMessages: StateFlow<List<UiMessage>> = chatRepository.messages
+    val uiMessages: StateFlow<List<UiMessage>> = localLlmRepositoryImpl.messages
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000L),
@@ -66,7 +66,7 @@ class MainViewModel(
         message = "" // Clear the input after sending
 
         viewModelScope.launch {
-            chatRepository.sendMessage(textToSend, isStreamingEnabled, isToolUseEnabled)
+            localLlmRepositoryImpl.sendMessage(textToSend, isStreamingEnabled, isToolUseEnabled)
         }
     }
 
@@ -84,18 +84,18 @@ class MainViewModel(
                 dest
             }
             // Now, delegate the actual loading to the repository.
-            chatRepository.loadModel(destinationFile.absolutePath)
+            localLlmRepositoryImpl.loadModel(destinationFile.absolutePath)
         }
     }
 
     fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1) {
         viewModelScope.launch {
-            chatRepository.bench(pp, tg, pl, nr)
+            localLlmRepositoryImpl.bench(pp, tg, pl, nr)
         }
     }
 
     fun clear() {
-        chatRepository.clear()
+        localLlmRepositoryImpl.clear()
     }
 
     // --- State Updaters ---
@@ -135,7 +135,7 @@ class MainViewModel(
         when (currentState) {
             is DownloadUiState.Downloaded -> {
                 viewModelScope.launch {
-                    chatRepository.loadModel(item.destination.path)
+                    localLlmRepositoryImpl.loadModel(item.destination.path)
                 }
             }
 
@@ -242,7 +242,7 @@ class MainViewModel(
     override fun onCleared() {
         super.onCleared()
         viewModelScope.launch {
-            chatRepository.cleanup()
+            localLlmRepositoryImpl.cleanup()
         }
     }
 }

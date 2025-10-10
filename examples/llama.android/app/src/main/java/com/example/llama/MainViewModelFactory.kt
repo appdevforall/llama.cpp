@@ -12,11 +12,11 @@ class MainViewModelFactory(private val application: Application) : ViewModelProv
             val llamaAndroid = LLamaAndroid.instance()
 
             // 2. Create the repository, which depends on LLamaAndroid
-            val chatRepository = ChatRepository(application, llamaAndroid)
+            val localLlmRepositoryImpl = LocalLlmRepositoryImpl(application, llamaAndroid)
 
             // 3. Create the ViewModel, which now depends on the repository
             @Suppress("UNCHECKED_CAST")
-            return MainViewModel(chatRepository) as T
+            return MainViewModel(localLlmRepositoryImpl) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }

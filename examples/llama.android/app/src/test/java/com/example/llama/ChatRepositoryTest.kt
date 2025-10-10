@@ -35,7 +35,7 @@ class ChatRepositoryTest {
     private lateinit var mockApplication: Application
 
     // The class under test
-    private lateinit var repository: ChatRepository
+    private lateinit var repository: LocalLlmRepositoryImpl
 
     @Before
     fun setup() {
@@ -44,7 +44,7 @@ class ChatRepositoryTest {
         mockApplication = mock()
 
         // Initialize the repository with mocks
-        repository = ChatRepository(
+        repository = LocalLlmRepositoryImpl(
             mockApplication,
             mockLlamaAndroid,
             ioDispatcher = mainCoroutineRule.testDispatcher // Use test dispatcher for immediate execution
@@ -64,7 +64,7 @@ class ChatRepositoryTest {
             )
 
             // Set the model family to ensure the correct prompt builder is used
-            ChatRepository::class.java.getDeclaredField("currentModelFamily").apply {
+            LocalLlmRepositoryImpl::class.java.getDeclaredField("currentModelFamily").apply {
                 isAccessible = true
                 set(repository, ModelFamily.GEMMA2)
             }
@@ -162,7 +162,7 @@ class ChatRepositoryTest {
             .doReturn(flowOf(firstModelResponse))
             .doReturn(flowOf(finalAnswer))
 
-        ChatRepository::class.java.getDeclaredField("currentModelFamily").apply {
+        LocalLlmRepositoryImpl::class.java.getDeclaredField("currentModelFamily").apply {
             isAccessible = true
             set(repository, ModelFamily.GEMMA2)
         }
@@ -222,7 +222,7 @@ class ChatRepositoryTest {
         val modelDirectAnswer = "I am an AI and cannot make a physical sandwich."
 
         // Set the model family to ensure the correct prompt is built
-        ChatRepository::class.java.getDeclaredField("currentModelFamily").apply {
+        LocalLlmRepositoryImpl::class.java.getDeclaredField("currentModelFamily").apply {
             isAccessible = true
             set(repository, ModelFamily.GEMMA2)
         }
@@ -264,7 +264,7 @@ class ChatRepositoryTest {
         val expectedModelAnswer = "The capital of France is Paris."
 
         // 1. Set the model family to ensure the tool-selection prompt is built correctly.
-        ChatRepository::class.java.getDeclaredField("currentModelFamily").apply {
+        LocalLlmRepositoryImpl::class.java.getDeclaredField("currentModelFamily").apply {
             isAccessible = true
             set(repository, ModelFamily.GEMMA2)
         }
@@ -312,7 +312,7 @@ class ChatRepositoryTest {
             "I can use the following tools: get_device_battery and get_current_datetime."
 
         // 1. Set the model family to ensure the tool-selection prompt is built.
-        ChatRepository::class.java.getDeclaredField("currentModelFamily").apply {
+        LocalLlmRepositoryImpl::class.java.getDeclaredField("currentModelFamily").apply {
             isAccessible = true
             set(repository, ModelFamily.GEMMA2)
         }
@@ -365,7 +365,7 @@ class ChatRepositoryTest {
             .doReturn(flowOf(expectedFinalAnswer))   // 2. Second, it returns the final answer.
 
         // Set the model family to trigger the correct prompt builder
-        ChatRepository::class.java.getDeclaredField("currentModelFamily").apply {
+        LocalLlmRepositoryImpl::class.java.getDeclaredField("currentModelFamily").apply {
             isAccessible = true
             set(repository, ModelFamily.GEMMA2)
         }

@@ -28,7 +28,7 @@ class MainViewModelTest {
     var mainCoroutineRule = MainCoroutineRule()
 
     // Mocks for the ViewModel's dependencies
-    private lateinit var mockChatRepository: ChatRepository
+    private lateinit var mockLocalLlmRepositoryImpl: LocalLlmRepositoryImpl
 
     // The class under test
     private lateinit var viewModel: MainViewModel
@@ -36,10 +36,10 @@ class MainViewModelTest {
     @Before
     fun setup() {
         // Create mock before each test
-        mockChatRepository = mock()
+        mockLocalLlmRepositoryImpl = mock()
 
         // Common setup for all tests: The ViewModel accesses .messages on init, so we must stub it.
-        whenever(mockChatRepository.messages).thenReturn(MutableStateFlow(emptyList()))
+        whenever(mockLocalLlmRepositoryImpl.messages).thenReturn(MutableStateFlow(emptyList()))
     }
 
     @Test
@@ -47,10 +47,10 @@ class MainViewModelTest {
         // Arrange: Create a test flow that the mock repository will return.
         val testMessages = listOf(UiMessage(1, "Test Message", MessageType.MODEL))
         val messagesFlow = MutableStateFlow(testMessages)
-        whenever(mockChatRepository.messages).thenReturn(messagesFlow)
+        whenever(mockLocalLlmRepositoryImpl.messages).thenReturn(messagesFlow)
 
         // Act: Initialize the ViewModel.
-        viewModel = MainViewModel(mockChatRepository)
+        viewModel = MainViewModel(mockLocalLlmRepositoryImpl)
 
         // Assert: The ViewModel's stateFlow should reflect the repository's flow.
         // FIX: Don't use .value on a StateFlow with WhileSubscribed in tests.
@@ -75,12 +75,12 @@ class MainViewModelTest {
         val userInput = "What's the time now?"
         val isStreaming = true
         val useTools = true
-        viewModel = MainViewModel(mockChatRepository)
+        viewModel = MainViewModel(mockLocalLlmRepositoryImpl)
 
         // FIX: Stub the suspend fun on the mock. If you don't, it suspends forever
         // and the `verify` call is never reached. Since it returns Unit, we can
         // use thenReturn(Unit).
-        whenever(mockChatRepository.sendMessage(any(), any(), any())).thenReturn(Unit)
+        whenever(mockLocalLlmRepositoryImpl.sendMessage(any(), any(), any())).thenReturn(Unit)
 
         viewModel.message = userInput // Directly set the public property
         viewModel.setStreaming(isStreaming)
@@ -90,33 +90,33 @@ class MainViewModelTest {
         viewModel.send()
 
         // Assert
-        verify(mockChatRepository).sendMessage(userInput, isStreaming, useTools)
+        verify(mockLocalLlmRepositoryImpl).sendMessage(userInput, isStreaming, useTools)
     }
 
     @Test
     fun `send does not delegate if message is blank`() = runTest {
         // Arrange
-        viewModel = MainViewModel(mockChatRepository)
+        viewModel = MainViewModel(mockLocalLlmRepositoryImpl)
         viewModel.message = "   " // Blank message
 
         // Act
         viewModel.send()
 
         // Assert: Verify that sendMessage was NEVER called.
-        verify(mockChatRepository, never()).sendMessage(any(), any(), any())
+        verify(mockLocalLlmRepositoryImpl, never()).sendMessage(any(), any(), any())
     }
 
 
     @Test
     fun `clear correctly delegates the call to the repository`() = runTest {
         // Arrange
-        viewModel = MainViewModel(mockChatRepository)
+        viewModel = MainViewModel(mockLocalLlmRepositoryImpl)
 
         // Act
         viewModel.clear()
 
         // Assert
-        verify(mockChatRepository).clear()
+        verify(mockLocalLlmRepositoryImpl).clear()
     }
 
 }
