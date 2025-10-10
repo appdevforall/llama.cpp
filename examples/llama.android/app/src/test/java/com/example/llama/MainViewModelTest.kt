@@ -45,7 +45,7 @@ class MainViewModelTest {
     @Test
     fun `uiMessages correctly exposes the state from repository`() = runTest {
         // Arrange: Create a test flow that the mock repository will return.
-        val testMessages = listOf(ChatMessage(1, "Test Message", MessageType.MODEL))
+        val testMessages = listOf(ChatMessage(1, "Test Message", Sender.AGENT))
         val messagesFlow = MutableStateFlow(testMessages)
         whenever(mockLocalLlmRepositoryImpl.messages).thenReturn(messagesFlow)
 
@@ -60,8 +60,8 @@ class MainViewModelTest {
 
         // Arrange for update: Push a new list to our test flow.
         val newTestMessages = listOf(
-            ChatMessage(1, "Test Message", MessageType.MODEL),
-            ChatMessage(2, "User Input", MessageType.USER)
+            ChatMessage(1, "Test Message", Sender.AGENT),
+            ChatMessage(2, "User Input", Sender.USER)
         )
         messagesFlow.value = newTestMessages
 

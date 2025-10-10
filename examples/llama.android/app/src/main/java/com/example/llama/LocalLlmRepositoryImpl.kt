@@ -68,9 +68,9 @@ class LocalLlmRepositoryImpl(
         isStreaming: Boolean,
         isToolUseEnabled: Boolean
     ) {
-        addMessage(userInput, MessageType.USER)
+        addMessage(userInput, Sender.USER)
         val placeholder = if (isStreaming) "" else "..."
-        addMessage(placeholder, MessageType.MODEL)
+        addMessage(placeholder, Sender.AGENT)
 
         if (isToolUseEnabled) {
             runAgentLoop()
@@ -84,36 +84,36 @@ class LocalLlmRepositoryImpl(
         if (pathToModel == loadedModelPath) {
             val message = "Model is already loaded."
             Log.d(tag, message)
-            addMessage(message, MessageType.SYSTEM)
+            addMessage(message, Sender.SYSTEM)
             return
         }
 
         try {
             if (loadedModelPath != null) {
                 Log.d(tag, "Switching models. Unloading: $loadedModelPath")
-                addMessage("Unloading previous model...", MessageType.SYSTEM)
+                addMessage("Unloading previous model...", Sender.SYSTEM)
                 withContext(ioDispatcher) {
                     engine.unloadModel()
                 }
             }
 
             currentModelFamily = detectModelFamily(pathToModel)
-            addMessage("Detected model family: $currentModelFamily", MessageType.SYSTEM)
+            addMessage("Detected model family: $currentModelFamily", Sender.SYSTEM)
             withContext(ioDispatcher) {
                 engine.loadModel(pathToModel)
             }
 
             loadedModelPath = pathToModel
-            addMessage("Loaded $pathToModel", MessageType.SYSTEM)
+            addMessage("Loaded $pathToModel", Sender.SYSTEM)
 
             val contextSize = engine.getContextSize()
-            addMessage("Model context size: $contextSize tokens", MessageType.SYSTEM)
+            addMessage("Model context size: $contextSize tokens", Sender.SYSTEM)
 
         } catch (exc: IllegalStateException) {
             Log.e(tag, "loadModel() failed", exc)
             addMessage(
                 exc.message ?: "An unknown error occurred during model loading.",
-                MessageType.SYSTEM
+                Sender.SYSTEM
             )
             loadedModelPath = null
         }
@@ -124,22 +124,22 @@ class LocalLlmRepositoryImpl(
             val start = System.nanoTime()
             val warmupResult = engine.bench(pp, tg, pl, nr)
             val end = System.nanoTime()
-            addMessage(warmupResult, MessageType.MODEL)
+            addMessage(warmupResult, Sender.AGENT)
 
             val warmupTime = (end - start).toDouble() / 1_000_000_000.0
-            addMessage("Warm up time: $warmupTime seconds, please wait...", MessageType.SYSTEM)
+            addMessage("Warm up time: $warmupTime seconds, please wait...", Sender.SYSTEM)
 
             if (warmupTime > 5.0) {
-                addMessage("Warm up took too long, aborting benchmark", MessageType.SYSTEM)
+                addMessage("Warm up took too long, aborting benchmark", Sender.SYSTEM)
                 return
             }
             val benchmarkResult = engine.bench(512, 128, 1, 3)
-            addMessage(benchmarkResult, MessageType.SYSTEM)
+            addMessage(benchmarkResult, Sender.SYSTEM)
         } catch (exc: IllegalStateException) {
             Log.e(tag, "bench() failed", exc)
             addMessage(
                 exc.message ?: "An unknown error occurred during benchmark.",
-                MessageType.SYSTEM
+                Sender.SYSTEM
             )
         }
     }
@@ -185,7 +185,7 @@ class LocalLlmRepositoryImpl(
             Log.d("AgentDebug", "--- [Step ${currentTurn + 1}] ---")
             val currentHistory = _messages.value
             val isFinalAnswerTurn =
-                currentHistory.getOrNull(currentHistory.size - 2)?.type == MessageType.TOOL_RESULT
+                currentHistory.getOrNull(currentHistory.size - 2)?.type == Sender.TOOL
 
             // 2. UPDATE THE STOP STRINGS
             val stopStrings = if (isFinalAnswerTurn) {
@@ -246,8 +246,8 @@ class LocalLlmRepositoryImpl(
 
                         // Execute the tool with the parsed arguments
                         val result = tool.execute(application, toolCall.args)
-                        addMessage(result, MessageType.TOOL_RESULT)
-                        addMessage("", MessageType.MODEL)
+                        addMessage(result, Sender.TOOL)
+                        addMessage("", Sender.AGENT)
                     } else {
                         // This handles the case where the model hallucinates a tool name.
                         val errorMsg = "Error: Model tried to call unknown tool '${toolCall.name}'"
@@ -268,7 +268,7 @@ class LocalLlmRepositoryImpl(
 
     // --- State Update Helpers ---
 
-    private fun addMessage(text: String, type: MessageType) {
+    private fun addMessage(text: String, type: Sender) {
         val message = ChatMessage(messageIdCounter.getAndIncrement(), text, type)
         _messages.update { currentList -> currentList + message }
     }
@@ -286,7 +286,7 @@ class LocalLlmRepositoryImpl(
         _messages.update { currentList ->
             if (currentList.isEmpty()) return@update currentList
             val lastMessage = currentList.last()
-            if (lastMessage.type == MessageType.MODEL) {
+            if (lastMessage.type == Sender.AGENT) {
                 val updatedMessage = lastMessage.copy(durationMs = durationMs)
                 currentList.dropLast(1) + updatedMessage
             } else {
@@ -318,19 +318,19 @@ class LocalLlmRepositoryImpl(
                 }
             }
 
-            else -> history.lastOrNull { it.type == MessageType.USER }?.text ?: ""
+            else -> history.lastOrNull { it.type == Sender.USER }?.text ?: ""
         }
     }
 
     private fun buildGemma2Prompt(history: List<ChatMessage>): String {
         // Find if the last message was a tool result to decide which prompt to use
-        val isFinalAnswerTurn = history.lastOrNull()?.type == MessageType.MODEL &&
-            history.getOrNull(history.size - 2)?.type == MessageType.TOOL_RESULT
+        val isFinalAnswerTurn = history.lastOrNull()?.type == Sender.AGENT &&
+            history.getOrNull(history.size - 2)?.type == Sender.TOOL
 
         if (isFinalAnswerTurn) {
             // If it's the final answer turn, use the simple synthesis prompt
-            val userQuestion = history.findLast { it.type == MessageType.USER }?.text ?: ""
-            val toolResult = (history.findLast { it.type == MessageType.TOOL_RESULT }?.text ?: "")
+            val userQuestion = history.findLast { it.type == Sender.USER }?.text ?: ""
+            val toolResult = (history.findLast { it.type == Sender.TOOL }?.text ?: "")
                 .replace(Regex("\\[Tool Result for [a-zA-Z_]+]:"), "")
                 .trim()
 
@@ -370,8 +370,8 @@ model: <tool_call>{"name": "get_weather", "args": {"city": "Paris"}}</tool_call>
             promptBuilder.append("\n\n**CONVERSATION:**\n")
             history.takeLast(4).forEach { message ->
                 when (message.type) {
-                    MessageType.USER -> promptBuilder.append("user: ${message.text}\n")
-                    MessageType.MODEL -> if (message.text.isNotBlank()) promptBuilder.append("model: ${message.text}\n")
+                    Sender.USER -> promptBuilder.append("user: ${message.text}\n")
+                    Sender.AGENT -> if (message.text.isNotBlank()) promptBuilder.append("model: ${message.text}\n")
                     else -> {}
                 }
             }
@@ -381,8 +381,8 @@ model: <tool_call>{"name": "get_weather", "args": {"city": "Paris"}}</tool_call>
     }
 
     private fun buildGemma2FinalAnswerPrompt(history: List<ChatMessage>): String {
-        val userQuestion = history.findLast { it.type == MessageType.USER }?.text ?: ""
-        val toolResult = (history.findLast { it.type == MessageType.TOOL_RESULT }?.text ?: "")
+        val userQuestion = history.findLast { it.type == Sender.USER }?.text ?: ""
+        val toolResult = (history.findLast { it.type == Sender.TOOL }?.text ?: "")
             .replace("[Tool Result for get_current_datetime]:", "") // Keep this cleanup
             .trim()
 
@@ -405,15 +405,15 @@ Answer:
         historyBuilder.append("<|start_header_id|>system<|end_header_id|>\n\n$masterSystemPrompt<|eot_id|>")
         for (message in history) {
             when (message.type) {
-                MessageType.USER -> historyBuilder.append("<|start_header_id|>user<|end_header_id|>\n\n${message.text}<|eot_id|>")
-                MessageType.MODEL -> {
+                Sender.USER -> historyBuilder.append("<|start_header_id|>user<|end_header_id|>\n\n${message.text}<|eot_id|>")
+                Sender.AGENT -> {
                     if (message.text.isNotBlank()) {
                         historyBuilder.append("<|start_header_id|>assistant<|end_header_id|>\n\n${message.text}")
                     }
                 }
 
-                MessageType.SYSTEM -> {}
-                MessageType.TOOL_RESULT -> {
+                Sender.SYSTEM -> {}
+                Sender.TOOL -> {
                     historyBuilder.append("<|start_header_id|>tool<|end_header_id|>\n")
                     historyBuilder.append(message.text)
                     historyBuilder.append("<|eot_id|>\n")

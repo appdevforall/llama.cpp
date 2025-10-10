@@ -183,7 +183,7 @@ class ChatRepositoryTest {
         val finalMessages = repository.messages.value
         assertEquals("Expected 4 messages after a successful tool call", 4, finalMessages.size)
         assertTrue(finalMessages[1].text.contains("Tool Call: get_current_datetime"))
-        assertEquals(MessageType.TOOL_RESULT, finalMessages[2].type)
+        assertEquals(Sender.TOOL, finalMessages[2].type)
         assertEquals(finalAnswer, finalMessages[3].text)
     }
 

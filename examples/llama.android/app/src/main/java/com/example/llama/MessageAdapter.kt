@@ -79,10 +79,10 @@ class MessageAdapter(context: Context) :
 
     override fun getItemViewType(position: Int): Int {
         return when (getItem(position).type) {
-            MessageType.SYSTEM -> VIEW_TYPE_SYSTEM
-            MessageType.USER -> VIEW_TYPE_USER
-            MessageType.MODEL -> VIEW_TYPE_MODEL
-            MessageType.TOOL_RESULT -> VIEW_TYPE_SYSTEM
+            Sender.SYSTEM -> VIEW_TYPE_SYSTEM
+            Sender.USER -> VIEW_TYPE_USER
+            Sender.AGENT -> VIEW_TYPE_MODEL
+            Sender.TOOL -> VIEW_TYPE_SYSTEM
         }
     }
 
