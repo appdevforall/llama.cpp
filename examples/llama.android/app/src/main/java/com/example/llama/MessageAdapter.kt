@@ -19,19 +19,19 @@ private const val VIEW_TYPE_USER = 1
 private const val VIEW_TYPE_MODEL = 2
 
 class MessageAdapter(context: Context) :
-    ListAdapter<UiMessage, MessageAdapter.MessageViewHolder>(MessageDiffCallback()) {
+    ListAdapter<ChatMessage, MessageAdapter.MessageViewHolder>(MessageDiffCallback()) {
 
     private val markwon = Markwon.create(context)
     private val timeFormatter = SimpleDateFormat("h:mm a", Locale.getDefault())
 
     sealed class MessageViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-        abstract fun bind(message: UiMessage, markwon: Markwon, timeFormatter: SimpleDateFormat)
+        abstract fun bind(message: ChatMessage, markwon: Markwon, timeFormatter: SimpleDateFormat)
 
         class SystemMessageViewHolder(view: View) : MessageViewHolder(view) {
             private val textView: TextView = view.findViewById(R.id.messageTextView)
             private val timestampTextView: TextView = view.findViewById(R.id.timestampTextView)
             override fun bind(
-                message: UiMessage,
+                message: ChatMessage,
                 markwon: Markwon,
                 timeFormatter: SimpleDateFormat
             ) {
@@ -44,7 +44,7 @@ class MessageAdapter(context: Context) :
             private val textView: TextView = view.findViewById(R.id.messageTextView)
             private val timestampTextView: TextView = view.findViewById(R.id.timestampTextView)
             override fun bind(
-                message: UiMessage,
+                message: ChatMessage,
                 markwon: Markwon,
                 timeFormatter: SimpleDateFormat
             ) {
@@ -58,7 +58,7 @@ class MessageAdapter(context: Context) :
             private val timestampTextView: TextView = view.findViewById(R.id.timestampTextView)
             private val durationTextView: TextView = view.findViewById(R.id.durationTextView)
             override fun bind(
-                message: UiMessage,
+                message: ChatMessage,
                 markwon: Markwon,
                 timeFormatter: SimpleDateFormat
             ) {
@@ -109,12 +109,12 @@ class MessageAdapter(context: Context) :
         holder.bind(getItem(position), markwon, timeFormatter)
     }
 
-    class MessageDiffCallback : DiffUtil.ItemCallback<UiMessage>() {
-        override fun areItemsTheSame(oldItem: UiMessage, newItem: UiMessage): Boolean {
+    class MessageDiffCallback : DiffUtil.ItemCallback<ChatMessage>() {
+        override fun areItemsTheSame(oldItem: ChatMessage, newItem: ChatMessage): Boolean {
             return oldItem.id == newItem.id
         }
 
-        override fun areContentsTheSame(oldItem: UiMessage, newItem: UiMessage): Boolean {
+        override fun areContentsTheSame(oldItem: ChatMessage, newItem: ChatMessage): Boolean {
             return oldItem == newItem
         }
     }

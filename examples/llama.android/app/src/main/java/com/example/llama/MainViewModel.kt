@@ -35,7 +35,7 @@ class MainViewModel(
     // --- State Exposure ---
 
     // Exposes the conversation history from the repository for the UI to observe.
-    val uiMessages: StateFlow<List<UiMessage>> = localLlmRepositoryImpl.messages
+    val chatMessages: StateFlow<List<ChatMessage>> = localLlmRepositoryImpl.messages
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000L),

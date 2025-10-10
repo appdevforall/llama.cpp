@@ -45,7 +45,7 @@ class MainViewModelTest {
     @Test
     fun `uiMessages correctly exposes the state from repository`() = runTest {
         // Arrange: Create a test flow that the mock repository will return.
-        val testMessages = listOf(UiMessage(1, "Test Message", MessageType.MODEL))
+        val testMessages = listOf(ChatMessage(1, "Test Message", MessageType.MODEL))
         val messagesFlow = MutableStateFlow(testMessages)
         whenever(mockLocalLlmRepositoryImpl.messages).thenReturn(messagesFlow)
 
@@ -56,17 +56,17 @@ class MainViewModelTest {
         // FIX: Don't use .value on a StateFlow with WhileSubscribed in tests.
         // There are no subscribers, so it will return the `initialValue`.
         // Instead, use .first() to suspend and collect the first emitted value.
-        assertEquals(testMessages, viewModel.uiMessages.first())
+        assertEquals(testMessages, viewModel.chatMessages.first())
 
         // Arrange for update: Push a new list to our test flow.
         val newTestMessages = listOf(
-            UiMessage(1, "Test Message", MessageType.MODEL),
-            UiMessage(2, "User Input", MessageType.USER)
+            ChatMessage(1, "Test Message", MessageType.MODEL),
+            ChatMessage(2, "User Input", MessageType.USER)
         )
         messagesFlow.value = newTestMessages
 
         // Assert after update: The ViewModel's flow should update accordingly.
-        assertEquals(newTestMessages, viewModel.uiMessages.first())
+        assertEquals(newTestMessages, viewModel.chatMessages.first())
     }
 
     @Test

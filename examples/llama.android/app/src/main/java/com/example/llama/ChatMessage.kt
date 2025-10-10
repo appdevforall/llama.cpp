@@ -1,6 +1,6 @@
 package com.example.llama
 
-data class UiMessage(
+data class ChatMessage(
     val id: Long,
     val text: String,
     val type: MessageType,

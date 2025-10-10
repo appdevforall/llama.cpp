@@ -48,7 +48,7 @@ class LocalLlmRepositoryImpl(
         SYSTEM_PROMPT.replace("[AVAILABLE_TOOLS]", toolDescriptions)
     }
 
-    private val _messages = MutableStateFlow<List<UiMessage>>(
+    private val _messages = MutableStateFlow<List<ChatMessage>>(
         listOf(
 //            UiMessage(
 //                id = messageIdCounter.getAndIncrement(),
@@ -57,7 +57,7 @@ class LocalLlmRepositoryImpl(
 //            )
         )
     )
-    val messages: StateFlow<List<UiMessage>> = _messages.asStateFlow()
+    val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
     private var loadedModelPath: String? = null
 
@@ -269,7 +269,7 @@ class LocalLlmRepositoryImpl(
     // --- State Update Helpers ---
 
     private fun addMessage(text: String, type: MessageType) {
-        val message = UiMessage(messageIdCounter.getAndIncrement(), text, type)
+        val message = ChatMessage(messageIdCounter.getAndIncrement(), text, type)
         _messages.update { currentList -> currentList + message }
     }
 
@@ -305,7 +305,7 @@ class LocalLlmRepositoryImpl(
     }
 
     private fun buildPromptWithHistory(
-        history: List<UiMessage>,
+        history: List<ChatMessage>,
         isFinalAnswerTurn: Boolean
     ): String {
         return when (currentModelFamily) {
@@ -322,7 +322,7 @@ class LocalLlmRepositoryImpl(
         }
     }
 
-    private fun buildGemma2Prompt(history: List<UiMessage>): String {
+    private fun buildGemma2Prompt(history: List<ChatMessage>): String {
         // Find if the last message was a tool result to decide which prompt to use
         val isFinalAnswerTurn = history.lastOrNull()?.type == MessageType.MODEL &&
             history.getOrNull(history.size - 2)?.type == MessageType.TOOL_RESULT
@@ -380,7 +380,7 @@ model: <tool_call>{"name": "get_weather", "args": {"city": "Paris"}}</tool_call>
         }
     }
 
-    private fun buildGemma2FinalAnswerPrompt(history: List<UiMessage>): String {
+    private fun buildGemma2FinalAnswerPrompt(history: List<ChatMessage>): String {
         val userQuestion = history.findLast { it.type == MessageType.USER }?.text ?: ""
         val toolResult = (history.findLast { it.type == MessageType.TOOL_RESULT }?.text ?: "")
             .replace("[Tool Result for get_current_datetime]:", "") // Keep this cleanup
@@ -399,7 +399,7 @@ Answer:
         return finalPrompt
     }
 
-    private fun buildLlama3Prompt(history: List<UiMessage>): String {
+    private fun buildLlama3Prompt(history: List<ChatMessage>): String {
         val historyBuilder = StringBuilder()
         historyBuilder.append("<|begin_of_text|>")
         historyBuilder.append("<|start_header_id|>system<|end_header_id|>\n\n$masterSystemPrompt<|eot_id|>")

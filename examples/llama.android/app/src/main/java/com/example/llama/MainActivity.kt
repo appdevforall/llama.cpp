@@ -127,7 +127,7 @@ class MainActivity(
         binding.benchButton.setOnClickListener { viewModel.bench(8, 4, 1) }
         binding.clearButton.setOnClickListener { viewModel.clear() }
         binding.copyButton.setOnClickListener {
-            val textToCopy = viewModel.uiMessages.value
+            val textToCopy = viewModel.chatMessages.value
                 ?.joinToString("\n") { it.text }
                 .orEmpty()
             clipboardManager.setPrimaryClip(ClipData.newPlainText("conversation", textToCopy))
@@ -171,7 +171,7 @@ class MainActivity(
         // Use lifecycleScope to collect the StateFlow safely
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                viewModel.uiMessages.collect { messages ->
+                viewModel.chatMessages.collect { messages ->
                     messageAdapter.submitList(messages)
                     if (messages.isNotEmpty()) {
                         binding.messagesRecyclerView.scrollToPosition(messages.size - 1)
